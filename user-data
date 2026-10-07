@@ -1,0 +1,22 @@
+#cloud-config
+ssh_pwauth: true
+users:
+  - name: cliff
+    groups: sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+chpasswd:
+  list: |
+    root:sec202609
+    cliff:sec202609
+  expire: false
+disable_root: false
+packages:
+  - bash-completion
+  - vim
+runcmd:
+  - [growpart, /dev/vda, 4]
+  - [pvresize, /dev/vda4]
+  - [lvextend, "-l", "+100%FREE", "/dev/rocky/lvroot"]
+  - [xfs_growfs, "/dev/rocky/lvroot"]
