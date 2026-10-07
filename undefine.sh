@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
+(
 VM_NAME="${1:-Rocky-Linux}"
 IMG_DIR="/var/lib/libvirt/images"
 
@@ -104,3 +104,4 @@ done
 if (( undefine_failed )); then
   echo "注意：sudo virsh undefine 报告过非致命错误（通常为未受管存储卷），残留文件已尝试清理，可用 'sudo virsh vol-list default' 核对。" >&2
 fi
+)
