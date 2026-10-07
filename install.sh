@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 解析参数：第一个位置参数为虚拟机名称（未指定时使用默认值），支持 --capacity 选项
@@ -35,7 +36,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-source "$SCRIPT_DIR/undefine.sh" "$VM_NAME"
+# 在子进程中执行清理脚本：不能用 source，否则 undefine.sh 里的
+# exit（如虚拟机不存在时的 exit 0）会直接终止本脚本，造成“闪退”，
+# 其顶部的 set -euo pipefail 也会污染本脚本的执行环境。
+if ! bash "$SCRIPT_DIR/undefine.sh" "$VM_NAME"; then
+  echo "错误：清理旧虚拟机失败，已取消安装。" >&2
+  exit 1
+fi
 
 # 用 genisoimage 从 cloud-init 数据文件重新生成 cidata.iso
 if ! command -v genisoimage >/dev/null 2>&1; then
