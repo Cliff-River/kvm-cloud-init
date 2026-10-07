@@ -72,6 +72,47 @@ def test_devices() -> None:
     assert root.find("./devices/serial") is not None
     assert root.find("./devices/console") is not None
 
+    # 默认：VNC 图形控制台，auto 不生成 video 元素
+    graphics = root.find("./devices/graphics")
+    assert graphics.get("type") == "vnc"
+    assert graphics.get("autoport") == "yes"
+    assert root.find("./devices/video") is None
+
+
+def _build_with(**kwargs) -> ET.Element:
+    defaults = dict(
+        name="vm1",
+        disk_path="/pool/vm1.qcow2",
+        iso_path="/pool/vm1-cidata.iso",
+        memory_mib=4096,
+        vcpus=4,
+        network="default",
+        firmware="efi",
+        os_variant="rocky10",
+        template_name="Rocky-LVM",
+    )
+    defaults.update(kwargs)
+    return ET.fromstring(build_domain_xml(**defaults))
+
+
+def test_graphics_spice() -> None:
+    root = _build_with(graphics="spice")
+    graphics = root.find("./devices/graphics")
+    assert graphics.get("type") == "spice"
+    assert graphics.get("autoport") == "yes"
+
+
+def test_graphics_none_omits_device() -> None:
+    root = _build_with(graphics="none")
+    assert root.find("./devices/graphics") is None
+
+
+def test_video_explicit_model() -> None:
+    root = _build_with(video="virtio")
+    model = root.find("./devices/video/model")
+    assert model.get("type") == "virtio"
+    assert model.get("heads") == "1"
+
 
 def test_metadata() -> None:
     root = ET.fromstring(_build())

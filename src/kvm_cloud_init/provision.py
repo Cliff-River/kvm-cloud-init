@@ -103,6 +103,8 @@ def create_instance(
         firmware=firmware_mode,
         os_variant=resolved.template.os_variant,
         template_name=resolved.template.name,
+        graphics=resolved.graphics,
+        video=resolved.video,
     )
     guest.define_and_start(conn, xml_desc)
     print(f"实例 {name} 已创建并启动（模板 {resolved.template.name}）。")

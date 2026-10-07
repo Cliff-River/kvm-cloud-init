@@ -33,6 +33,8 @@ t2:
   os_variant: ubuntu26.04
   memory: 4096
   capacity: 50G
+  graphics: spice
+  video: virtio
   user-data: |
     #cloud-config
     template_inline: true
@@ -58,6 +60,7 @@ i2:
 i3:
   template: t1
   capacity: 100G
+  graphics: none
   user-data: |
     #cloud-config
     instance_block: true

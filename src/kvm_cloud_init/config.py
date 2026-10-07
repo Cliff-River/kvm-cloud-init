@@ -25,6 +25,10 @@ DOC_NAMES = ("meta-data", "network-config", "user-data")
 REQUIRED_DOCS = ("meta-data", "user-data")
 _SCALAR_FIELDS = ("memory", "vcpus", "capacity")
 _VALID_FIRMWARE = ("auto", "uefi", "bios")
+_VALID_GRAPHICS = ("vnc", "spice", "none")
+_VALID_VIDEO = ("auto", "virtio", "bochs", "cirrus", "qxl")
+#: 模板/实例可覆盖的字符串型硬件选项
+_CHOICE_FIELDS = ("graphics", "video")
 
 
 def project_root() -> Path:
@@ -40,6 +44,8 @@ class Defaults:
     vcpus: int = 6
     network: str = "default"
     firmware: str = "auto"
+    graphics: str = "vnc"
+    video: str = "auto"
     shutdown_timeout: int = 120
 
 
@@ -55,6 +61,8 @@ class Template:
     memory: int | None = None
     vcpus: int | None = None
     capacity: str | None = None
+    graphics: str | None = None
+    video: str | None = None
     docs: dict[str, str] = field(default_factory=dict)
 
 
@@ -67,6 +75,8 @@ class InstanceSpec:
     memory: int | None = None
     vcpus: int | None = None
     capacity: str | None = None
+    graphics: str | None = None
+    video: str | None = None
     docs: dict[str, str] = field(default_factory=dict)
 
 
@@ -83,6 +93,8 @@ class ResolvedInstance:
     capacity: str | None
     network: str
     firmware: str
+    graphics: str
+    video: str
     shutdown_timeout: int
     storage_pool: str
 
@@ -123,6 +135,13 @@ def _as_int(value: Any, context: str) -> int:
     return value
 
 
+def _choice(value: Any, options: tuple[str, ...], context: str) -> str:
+    text = str(value).lower()
+    if text not in options:
+        raise ConfigError(f"{context} 必须是 {'/'.join(options)} 之一，当前值：{value!r}")
+    return text
+
+
 def _parse_defaults(raw: dict[str, Any]) -> Defaults:
     allowed = set(Defaults.__dataclass_fields__)
     unknown = set(raw) - allowed
@@ -140,11 +159,11 @@ def _parse_defaults(raw: dict[str, Any]) -> Defaults:
     if "network" in raw:
         defaults.network = str(raw["network"])
     if "firmware" in raw:
-        defaults.firmware = str(raw["firmware"]).lower()
-        if defaults.firmware not in _VALID_FIRMWARE:
-            raise ConfigError(
-                f"default.conf 的 firmware 必须是 { '/'.join(_VALID_FIRMWARE) } 之一"
-            )
+        defaults.firmware = _choice(raw["firmware"], _VALID_FIRMWARE, "default.conf 的 firmware")
+    if "graphics" in raw:
+        defaults.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, "default.conf 的 graphics")
+    if "video" in raw:
+        defaults.video = _choice(raw["video"], _VALID_VIDEO, "default.conf 的 video")
     if "shutdown_timeout" in raw:
         defaults.shutdown_timeout = _as_int(
             raw["shutdown_timeout"], "default.conf 的 shutdown_timeout"
@@ -182,10 +201,14 @@ def _parse_template(name: str, raw: Any) -> Template:
         tpl.vcpus = _as_int(raw["vcpus"], f"模板 {name} 的 vcpus")
     if "capacity" in raw and raw["capacity"] is not None:
         tpl.capacity = str(raw["capacity"])
+    if raw.get("graphics") is not None:
+        tpl.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, f"模板 {name} 的 graphics")
+    if raw.get("video") is not None:
+        tpl.video = _choice(raw["video"], _VALID_VIDEO, f"模板 {name} 的 video")
     tpl.docs = _extract_docs(raw, f"模板 {name}")
     allowed = {
         "path", "image_dir", "image", "os_variant", "memory", "vcpus",
-        "capacity", *DOC_NAMES,
+        "capacity", *_CHOICE_FIELDS, *DOC_NAMES,
     }
     unknown = set(raw) - allowed
     if unknown:
@@ -206,8 +229,12 @@ def _parse_instance(name: str, raw: Any) -> InstanceSpec:
             setattr(inst, scalar, _as_int(raw[scalar], f"实例 {name} 的 {scalar}"))
     if "capacity" in raw and raw["capacity"] is not None:
         inst.capacity = str(raw["capacity"])
+    if raw.get("graphics") is not None:
+        inst.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, f"实例 {name} 的 graphics")
+    if raw.get("video") is not None:
+        inst.video = _choice(raw["video"], _VALID_VIDEO, f"实例 {name} 的 video")
     inst.docs = _extract_docs(raw, f"实例 {name}")
-    allowed = {"template", *_SCALAR_FIELDS, *DOC_NAMES}
+    allowed = {"template", *_SCALAR_FIELDS, *_CHOICE_FIELDS, *DOC_NAMES}
     unknown = set(raw) - allowed
     if unknown:
         raise ConfigError(f"实例 {name} 存在未知字段：{', '.join(sorted(unknown))}")
@@ -297,6 +324,8 @@ class ConfigStore:
             capacity=str(capacity) if capacity is not None else None,
             network=self.defaults.network,
             firmware=self.defaults.firmware,
+            graphics=pick("graphics"),
+            video=pick("video"),
             shutdown_timeout=self.defaults.shutdown_timeout,
             storage_pool=self.defaults.storage_pool,
         )

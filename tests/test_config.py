@@ -22,15 +22,20 @@ def test_merge_instance_over_template_over_defaults(store: ConfigStore) -> None:
     assert i1.vcpus == 2              # 默认值
     assert i1.capacity is None        # 都没设
     assert i1.template.name == "t1"
+    assert i1.graphics == "vnc"       # 默认值
+    assert i1.video == "auto"         # 默认值
 
     i2 = store.resolve("i2")
     assert i2.memory == 4096          # 模板值
     assert i2.capacity == "50G"       # 模板值
+    assert i2.graphics == "spice"     # 模板覆盖默认
+    assert i2.video == "virtio"
     assert i2.template.image == "u.qcow2"
 
     i3 = store.resolve("i3")
     assert i3.memory == 1024          # 默认
     assert i3.capacity == "100G"      # 实例覆盖模板（t1 本无 capacity）
+    assert i3.graphics == "none"      # 实例覆盖
 
 
 def test_ad_hoc_instance_requires_template(store: ConfigStore) -> None:
@@ -88,6 +93,20 @@ def test_legacy_wrapper_key_rejected(project_dir, filename: str, wrapper: str) -
 def test_bad_firmware(project_dir) -> None:
     (project_dir / "default.conf").write_text("firmware: weird\n")
     with pytest.raises(ConfigError, match="firmware"):
+        ConfigStore.load(project_dir)
+
+
+def test_bad_graphics_in_defaults(project_dir) -> None:
+    (project_dir / "default.conf").write_text("graphics: rdp\n")
+    with pytest.raises(ConfigError, match="graphics"):
+        ConfigStore.load(project_dir)
+
+
+def test_bad_video_in_template(project_dir) -> None:
+    (project_dir / "templates.conf").write_text(
+        "t1:\n  path: templates/t1\n  image: b.qcow2\n  video: svga\n"
+    )
+    with pytest.raises(ConfigError, match="video"):
         ConfigStore.load(project_dir)
 
 

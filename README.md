@@ -71,7 +71,10 @@ All three `.conf` files are YAML. Precedence:
 ### `default.conf`
 
 `storage_pool`, `image_dir`, `memory` (MiB), `vcpus`, `network`,
-`firmware` (`auto`/`uefi`/`bios`), `shutdown_timeout` (seconds).
+`firmware` (`auto`/`uefi`/`bios`), `graphics` (`vnc`/`spice`/`none`),
+`video` (`auto`/`virtio`/`bochs`/`cirrus`/`qxl`), `shutdown_timeout` (seconds).
+`graphics: none` leaves the serial console only; `video: auto` omits the
+`<video>` element so libvirt/qemu picks its default model.
 
 ### `templates.conf`
 
@@ -84,6 +87,8 @@ rocky:                                # template name, top-level key
   memory: 6144                        # optional overrides
   vcpus: 6
   capacity: 100G                      # optional disk target size
+  graphics: spice                     # optional: vnc/spice/none
+  video: virtio                       # optional: auto/virtio/bochs/cirrus/qxl
   user-data: |                        # optional inline override, per file
     #cloud-config
     ...
@@ -103,6 +108,7 @@ rocky-dev:              # instance name (= libvirt domain name), top-level key
   memory: 8192
   vcpus: 4
   capacity: 100G
+  graphics: none        # optional: headless (serial only)
   user-data: |          # whole-document replacement, no YAML deep merge
     #cloud-config
     ...
@@ -217,7 +223,10 @@ uv run kvm-cloud-init destroy rocky-llm
 ### `default.conf`
 
 字段：`storage_pool`、`image_dir`、`memory`（MiB）、`vcpus`、`network`、
-`firmware`（`auto`/`uefi`/`bios`）、`shutdown_timeout`（秒）。
+`firmware`（`auto`/`uefi`/`bios`）、`graphics`（`vnc`/`spice`/`none`）、
+`video`（`auto`/`virtio`/`bochs`/`cirrus`/`qxl`）、`shutdown_timeout`（秒）。
+`graphics: none` 表示无图形设备、仅保留串口控制台；`video: auto` 表示不写
+`<video>` 元素，由 libvirt/qemu 采用默认显卡型号。
 
 ### `templates.conf`
 
@@ -230,6 +239,8 @@ rocky:                                # 模板名，顶层键
   memory: 6144                        # 以下均为可选覆盖
   vcpus: 6
   capacity: 100G                      # 磁盘目标大小
+  graphics: spice                     # 可选：vnc/spice/none
+  video: virtio                       # 可选：auto/virtio/bochs/cirrus/qxl
   user-data: |                        # 可选内联覆盖，按文件粒度
     #cloud-config
     ...
@@ -249,6 +260,7 @@ rocky-dev:              # 实例名（即 libvirt 域名），顶层键
   memory: 8192
   vcpus: 4
   capacity: 100G
+  graphics: none        # 可选：无图形，仅串口控制台
   user-data: |          # 整块替换，不做 YAML 深合并
     #cloud-config
     ...
