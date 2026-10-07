@@ -5,6 +5,7 @@ VM_NAME="Rocky-Linux"
 CAPACITY=""
 NAME_SET=0
 IMG_FILENAME="Rocky-10-GenericCloud-LVM-10.2-20260525.0.x86_64.qcow2"
+IMG_SRC_DIR="$SCRIPT_DIR/images"   # 源镜像所在目录，默认使用项目内的 images 文件夹
 IMG_LIBVIRT_DIR="/var/lib/libvirt/images"
 IMG_LIBVIRT_PATH="$IMG_LIBVIRT_DIR/$IMG_FILENAME"
 
@@ -34,7 +35,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-bash "$SCRIPT_DIR/undefine.sh" "$VM_NAME"
+source "$SCRIPT_DIR/undefine.sh" "$VM_NAME"
 
 # 用 genisoimage 从 cloud-init 数据文件重新生成 cidata.iso
 if ! command -v genisoimage >/dev/null 2>&1; then
@@ -45,7 +46,7 @@ rm -f "$SCRIPT_DIR/cidata.iso"
 genisoimage -output "$SCRIPT_DIR/cidata.iso" -volid cidata -joliet -rock \
   "$SCRIPT_DIR/meta-data" "$SCRIPT_DIR/network-config" "$SCRIPT_DIR/user-data"
 
-sudo cp "$HOME/OS/$IMG_FILENAME" "$IMG_LIBVIRT_DIR/"
+sudo cp "$IMG_SRC_DIR/$IMG_FILENAME" "$IMG_LIBVIRT_DIR/"
 sudo cp "$SCRIPT_DIR/cidata.iso" "$IMG_LIBVIRT_DIR/"
 
 # 如果指定了 --capacity，扩容复制后的 qcow2 镜像  
