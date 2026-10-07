@@ -32,6 +32,8 @@ def build_domain_xml(
     firmware: str,
     os_variant: str,
     template_name: str,
+    graphics: str = "vnc",
+    video: str = "auto",
 ) -> str:
     """生成与原 virt-install 参数等价的域 XML。"""
     ET.register_namespace("kci", METADATA_NS)
@@ -85,7 +87,17 @@ def build_domain_xml(
     console = _sub(devices, "console", type="pty")
     _sub(console, "target", type="serial", port="0")
 
-    _sub(devices, "graphics", type="vnc", port="-1", autoport="yes")
+    # 图形控制台：vnc/spice 自动选端口；none 表示无图形设备（仅串口）
+    if graphics == "vnc":
+        _sub(devices, "graphics", type="vnc", port="-1", autoport="yes")
+    elif graphics == "spice":
+        _sub(devices, "graphics", type="spice", autoport="yes")
+
+    # 虚拟显卡：auto 不写 video 元素，由 libvirt/qemu 采用其默认型号
+    if video != "auto":
+        video_el = _sub(devices, "video")
+        _sub(video_el, "model", type=video, heads="1")
+
     _sub(devices, "memballoon", model="virtio")
     rng = _sub(devices, "rng", model="virtio")
     _sub(rng, "backend", "/dev/urandom", model="random")
