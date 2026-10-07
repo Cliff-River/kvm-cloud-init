@@ -101,6 +101,20 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _load_table(path: Path, legacy_wrapper: str) -> dict[str, Any]:
+    """加载 templates/instances 配置：根映射即为定义表。
+
+    检测旧版包装键（templates:/instances:）并拒绝，提示去掉一层缩进。
+    """
+    data = _load_yaml(path)
+    if legacy_wrapper in data and isinstance(data[legacy_wrapper], dict):
+        raise ConfigError(
+            f"{path.name} 仍使用已废弃的顶层键 “{legacy_wrapper}:”，"
+            f"请将其下的条目提升到顶层（删除该键并减少一层缩进）"
+        )
+    return data
+
+
 def _as_int(value: Any, context: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"{context} 必须是整数，当前值：{value!r}")
@@ -220,15 +234,16 @@ class ConfigStore:
         base = Path(root) if root else project_root()
         defaults = _parse_defaults(_load_yaml(base / "default.conf"))
 
-        tpl_raw = _load_yaml(base / "templates.conf").get("templates") or {}
-        if not isinstance(tpl_raw, dict):
-            raise ConfigError("templates.conf 的 templates 必须是键值映射")
-        templates = {name: _parse_template(name, body) for name, body in tpl_raw.items()}
-
-        inst_raw = _load_yaml(base / "instances.conf").get("instances") or {}
-        if not isinstance(inst_raw, dict):
-            raise ConfigError("instances.conf 的 instances 必须是键值映射")
-        instances = {name: _parse_instance(name, body) for name, body in inst_raw.items()}
+        # 顶层即模板/实例表（文件名已表明语义，不再使用包装键）。
+        # templates / instances 为保留名，用于识别旧格式并给出迁移提示。
+        templates = {
+            name: _parse_template(name, body)
+            for name, body in _load_table(base / "templates.conf", "templates").items()
+        }
+        instances = {
+            name: _parse_instance(name, body)
+            for name, body in _load_table(base / "instances.conf", "instances").items()
+        }
 
         # 交叉校验：实例引用的模板必须存在
         for inst in instances.values():

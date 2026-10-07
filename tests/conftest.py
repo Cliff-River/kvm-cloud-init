@@ -21,48 +21,46 @@ shutdown_timeout: 5
 """
 
 _TEMPLATES_CONF = """\
-templates:
-  t1:
-    path: templates/t1
-    image_dir: images
-    image: base.qcow2
-    os_variant: rocky10
+t1:
+  path: templates/t1
+  image_dir: images
+  image: base.qcow2
+  os_variant: rocky10
 
-  t2:
-    path: templates/t2
-    image: u.qcow2
-    os_variant: ubuntu26.04
-    memory: 4096
-    capacity: 50G
-    user-data: |
-      #cloud-config
-      template_inline: true
+t2:
+  path: templates/t2
+  image: u.qcow2
+  os_variant: ubuntu26.04
+  memory: 4096
+  capacity: 50G
+  user-data: |
+    #cloud-config
+    template_inline: true
 
-  t3:
-    image: x.qcow2
-    user-data: |
-      #cloud-config
-      fully_inline: true
-    meta-data: |
-      instance-id: t3
-      local-hostname: t3
+t3:
+  image: x.qcow2
+  user-data: |
+    #cloud-config
+    fully_inline: true
+  meta-data: |
+    instance-id: t3
+    local-hostname: t3
 """
 
 _INSTANCES_CONF = """\
-instances:
-  i1:
-    template: t1
-    memory: 2048
+i1:
+  template: t1
+  memory: 2048
 
-  i2:
-    template: t2
+i2:
+  template: t2
 
-  i3:
-    template: t1
-    capacity: 100G
-    user-data: |
-      #cloud-config
-      instance_block: true
+i3:
+  template: t1
+  capacity: 100G
+  user-data: |
+    #cloud-config
+    instance_block: true
 """
 
 

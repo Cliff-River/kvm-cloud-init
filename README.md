@@ -76,19 +76,21 @@ All three `.conf` files are YAML. Precedence:
 ### `templates.conf`
 
 ```yaml
-templates:
-  rocky:
-    path: templates/Rocky-LLM          # directory with the three cloud-init files
-    image_dir: images/                 # optional, defaults to default.conf image_dir
-    image: Rocky-10-GenericCloud.qcow2 # required
-    os_variant: rocky10                # recorded in domain metadata
-    memory: 6144                       # optional overrides
-    vcpus: 6
-    capacity: 100G                     # optional disk target size
-    user-data: |                       # optional inline override, per file
-      #cloud-config
-      ...
+rocky:                                # template name, top-level key
+  path: templates/Rocky-LVM           # directory with the three cloud-init files
+  image_dir: images/                  # optional, defaults to default.conf image_dir
+  image: Rocky-10-GenericCloud.qcow2  # required
+  os_variant: rocky10                 # recorded in domain metadata
+  memory: 6144                        # optional overrides
+  vcpus: 6
+  capacity: 100G                      # optional disk target size
+  user-data: |                        # optional inline override, per file
+    #cloud-config
+    ...
 ```
+
+The top level of `templates.conf` is the template table itself — there is no
+wrapping `templates:` key (the file name already provides that namespace).
 
 Each inline `meta-data` / `network-config` / `user-data` block replaces the
 same-named file under `path`; omitted files are loaded from the directory.
@@ -96,15 +98,14 @@ same-named file under `path`; omitted files are loaded from the directory.
 ### `instances.conf`
 
 ```yaml
-instances:
-  rocky-dev:
-    template: rocky
-    memory: 8192
-    vcpus: 4
-    capacity: 100G
-    user-data: |        # whole-document replacement, no YAML deep merge
-      #cloud-config
-      ...
+rocky-dev:              # instance name (= libvirt domain name), top-level key
+  template: rocky
+  memory: 8192
+  vcpus: 4
+  capacity: 100G
+  user-data: |          # whole-document replacement, no YAML deep merge
+    #cloud-config
+    ...
 ```
 
 The instance name is the libvirt domain name. Each instance gets its own
@@ -221,19 +222,21 @@ uv run kvm-cloud-init destroy rocky-llm
 ### `templates.conf`
 
 ```yaml
-templates:
-  rocky:
-    path: templates/Rocky-LLM          # 内含 cloud-init 三件套的目录
-    image_dir: images/                 # 可选，缺省取 default.conf
-    image: Rocky-10-GenericCloud.qcow2 # 必填
-    os_variant: rocky10                # 记入域 metadata
-    memory: 6144                       # 以下均为可选覆盖
-    vcpus: 6
-    capacity: 100G                     # 磁盘目标大小
-    user-data: |                       # 可选内联覆盖，按文件粒度
-      #cloud-config
-      ...
+rocky:                                # 模板名，顶层键
+  path: templates/Rocky-LVM           # 内含 cloud-init 三件套的目录
+  image_dir: images/                  # 可选，缺省取 default.conf
+  image: Rocky-10-GenericCloud.qcow2  # 必填
+  os_variant: rocky10                 # 记入域 metadata
+  memory: 6144                        # 以下均为可选覆盖
+  vcpus: 6
+  capacity: 100G                      # 磁盘目标大小
+  user-data: |                        # 可选内联覆盖，按文件粒度
+    #cloud-config
+    ...
 ```
+
+`templates.conf` 的顶层就是模板表本身，没有 `templates:` 包装键
+（文件名已经提供了这层命名空间）。
 
 内联 `meta-data` / `network-config` / `user-data` 会整块替换 `path` 目录中的
 同名文件；未内联的文件仍从目录读取。
@@ -241,15 +244,14 @@ templates:
 ### `instances.conf`
 
 ```yaml
-instances:
-  rocky-dev:
-    template: rocky
-    memory: 8192
-    vcpus: 4
-    capacity: 100G
-    user-data: |        # 整块替换，不做 YAML 深合并
-      #cloud-config
-      ...
+rocky-dev:              # 实例名（即 libvirt 域名），顶层键
+  template: rocky
+  memory: 8192
+  vcpus: 4
+  capacity: 100G
+  user-data: |          # 整块替换，不做 YAML 深合并
+    #cloud-config
+    ...
 ```
 
 实例名即 libvirt 域名。每个实例使用独立的存储卷 `<名称>.qcow2` 与

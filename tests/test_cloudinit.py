@@ -36,13 +36,12 @@ def test_fully_inline_template(store: ConfigStore) -> None:
 
 
 def test_missing_required_doc(project_dir) -> None:
-    (project_dir / "instances.conf").write_text("instances: {}\n")
+    (project_dir / "instances.conf").write_text("")
     (project_dir / "templates.conf").write_text(
         """\
-templates:
-  empty:
-    path: templates/ghost
-    image: base.qcow2
+empty:
+  path: templates/ghost
+  image: base.qcow2
 """
     )
     store = ConfigStore.load(project_dir)

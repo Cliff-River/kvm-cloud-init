@@ -1,6 +1,7 @@
 *.iso
 *.qcow2
 
+.venv/
 images/
 
 __pycache__/

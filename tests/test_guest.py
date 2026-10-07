@@ -17,7 +17,7 @@ def _build() -> str:
         network="default",
         firmware="efi",
         os_variant="rocky10",
-        template_name="Rocky-LLM",
+        template_name="Rocky-LVM",
     )
 
 
@@ -76,5 +76,5 @@ def test_devices() -> None:
 def test_metadata() -> None:
     root = ET.fromstring(_build())
     config = root.find(f".//{{{METADATA_NS}}}config")
-    assert config.findtext(f"{{{METADATA_NS}}}template") == "Rocky-LLM"
+    assert config.findtext(f"{{{METADATA_NS}}}template") == "Rocky-LVM"
     assert config.findtext(f"{{{METADATA_NS}}}os-variant") == "rocky10"

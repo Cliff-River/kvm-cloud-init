@@ -11,8 +11,8 @@ from kvm_cloud_init.errors import ConfigError, InstanceNotFound, TemplateNotFoun
 def test_load_real_project() -> None:
     """当前仓库的真实配置必须可正常加载。"""
     store = ConfigStore.load()
-    assert {"Rocky-LLM", "Ubuntu", "Debian", "AlmaLinux"} <= set(store.templates)
-    assert "rocky-llm" in store.instances
+    assert {"Rocky-LVM", "Ubuntu", "Debian", "AlmaLinux"} <= set(store.templates)
+    assert "rocky-lvm" in store.instances
     assert store.defaults.shutdown_timeout == 120
 
 
@@ -42,7 +42,7 @@ def test_ad_hoc_instance_requires_template(store: ConfigStore) -> None:
 
 def test_missing_template_reference(project_dir) -> None:
     (project_dir / "instances.conf").write_text(
-        "instances:\n  bad:\n    template: ghost\n"
+        "bad:\n  template: ghost\n"
     )
     with pytest.raises(ConfigError, match="模板 ghost"):
         ConfigStore.load(project_dir)
@@ -61,7 +61,7 @@ def test_unknown_template_name(store: ConfigStore) -> None:
 
 def test_unknown_field_rejected(project_dir) -> None:
     (project_dir / "templates.conf").write_text(
-        "templates:\n  bad:\n    image: x.qcow2\n    bogus: 1\n"
+        "bad:\n  image: x.qcow2\n  bogus: 1\n"
     )
     with pytest.raises(ConfigError, match="未知字段"):
         ConfigStore.load(project_dir)
@@ -69,9 +69,19 @@ def test_unknown_field_rejected(project_dir) -> None:
 
 def test_template_requires_path_or_inline(project_dir) -> None:
     (project_dir / "templates.conf").write_text(
-        "templates:\n  bad:\n    image: x.qcow2\n"
+        "bad:\n  image: x.qcow2\n"
     )
     with pytest.raises(ConfigError, match="path 或内联"):
+        ConfigStore.load(project_dir)
+
+
+@pytest.mark.parametrize(
+    ("filename", "wrapper"),
+    [("templates.conf", "templates"), ("instances.conf", "instances")],
+)
+def test_legacy_wrapper_key_rejected(project_dir, filename: str, wrapper: str) -> None:
+    (project_dir / filename).write_text(f"{wrapper}:\n  x: {{}}\n")
+    with pytest.raises(ConfigError, match="已废弃的顶层键"):
         ConfigStore.load(project_dir)
 
 
