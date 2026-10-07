@@ -1,13 +1,17 @@
 [project]
 name = "kvm-cloud-init"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-template, multi-instance KVM VM provisioning via cloud-init NoCloud"
 readme = "README.md"
 authors = [
     { name = "Cliff Huang", email = "hzf510920@163.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "libvirt-python>=12.8.0",
+    "pycdlib>=1.21.0",
+    "pyyaml>=6.0.3",
+]
 
 [project.scripts]
 kvm-cloud-init = "kvm_cloud_init:main"
@@ -15,3 +19,8 @@ kvm-cloud-init = "kvm_cloud_init:main"
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
