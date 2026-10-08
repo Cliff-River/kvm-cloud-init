@@ -13,7 +13,8 @@ import libvirt
 from . import cloudinit, qcow2, seediso
 from .config import ConfigStore, ResolvedInstance
 from .errors import ImageNotFound
-from .hv import client, domains, firmware, guest, storage as hv_storage
+from .hv import client, domains, firmware, guest
+from .hv import storage as hv_storage
 from .hv.client import DOMAIN_STATE_NAMES, pool_target_path
 
 DISK_SUFFIX = ".qcow2"
