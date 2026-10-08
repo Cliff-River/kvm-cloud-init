@@ -1,28 +1,82 @@
-# 需求：用 Python 重构 kvm-cloud-init
+# 需求：实例删除保护级别（protection level）
 
-将现有 Bash 脚本重构为 Python 项目，实现多 OS 模板、多实例的 KVM 虚拟机管理。uv 已初始化（Python 3.13、src 布局、入口 `kvm-cloud-init`），直接开发。
+为实例引入可配置的删除保护级别，避免生产环境实例被误删。保护级别通过配置文件定义，destroy 与 create 的隐式销毁均遵守该规则。
 
-## 要求
+## 1. 字段定义
 
-1. 代码放在 `src/kvm_cloud_init/`，全部加类型注解；按职责拆分为多个模块（cli / config / cloudinit / seediso / libvirt / provision / errors），不要堆在单文件。
-2. 依赖用 uv 管理：`uv add pyyaml libvirt-python virtinst pycdlib`、`uv add --dev pytest`。**优先使用 Python 库而非 subprocess 调 CLI**，不造轮子：libvirt 操作用 libvirt-python（`virsh`/`undefine` 等全部走 API；域/快照/卷 XML 用 `xml.etree` 解析），创建/导入虚拟机用 virtinst（virt-install 的底层库），生成 cidata.iso 用 pycdlib（替代 genisoimage），镜像扩容/上传优先用 libvirt storage API。仅在 Python 库确实无法覆盖时才保留 CLI 兜底。**所有实例操作一律连接 `qemu:///system` 会话（系统级），禁止使用 `qemu:///session`。**
-3. 三个配置文件均为 **YAML 格式**：
-   - `default.conf`：全局默认值（存储池 `/var/lib/libvirt/images`、镜像目录 `images/`、内存、vCPU、网络、固件 auto、关机超时 120s）。
-   - `templates.conf`：**以原 `template.conf` 的现有配置（Rocky-LLM 模板）为结构示例和起点，后续模板在同一结构上扩展，不要另起设计**。原 INI 字段一一对应：`[Rocky-LLM]`→模板名、`template-path`→`path`（修正为实际目录 `templates/Rocky-LLM`）、`images-path`→`image_dir`、`image-name`→`image`；再在该结构上扩展 `os_variant`、`memory`、`vcpus`、`capacity`（磁盘目标大小，缺省不扩容）与内联 `meta-data`/`network-config`/`user-data`（按文件覆盖 path 中同名文件）字段。
-   - `instances.conf`：以实例名为键（即 libvirt domain），通过 `template` 引用模板，可覆盖 `memory`/`vcpus`/`capacity` 及整块替换三份 cloud-init 文档（不做 YAML 深合并）。
-   - 优先级：实例 > 模板 > 默认值。配置文件需带注释示例。
-4. CLI（argparse 子命令）：
-   - `create <实例名> [--template T]`，同名实例先销毁再创建（幂等）；
-   - `destroy <实例名> [--force]`；
-   - `list`（实例配置 + libvirt 状态）；
-   - `templates`。
-5. 创建流程：用 `tempfile` 建临时目录，写入渲染后的三份 cloud-init 文件，pycdlib 生成卷标 `cidata` 的 iso；通过 libvirt storage API 将镜像与 iso 建为存储池卷并按需扩容，用 virtinst 定义并启动域（virtio、SATA 光驱、不自动连控制台，OVMF 检测后 UEFI/BIOS 回退）；临时目录用上下文管理器保证清理。
-6. 销毁流程从 `undefine.sh` 完整迁移为 libvirt API 调用：优雅关机轮询、删快照、undefine（含 NVRAM 与存储卷）、从域/快照 XML 收集外部快照残留文件并沿 backing chain 追基础镜像后删除。
-7. pytest 测试放 `tests/`，mock libvirt/virtinst/pycdlib（不建立真实 qemu:///system 连接），无需 root/KVM，`uv run pytest` 可直接通过；重点测：配置合并优先级、cloud-init 渲染覆盖、残留文件与 backing chain 收集、CLI 参数解析。
-8. 更新 `README.md`（保持中英双语）：配置字段说明、CLI 用法、迁移说明。
-9. 生成 `.trae/rules/project_rules.md`（架构、约定、常用命令、测试要求）和根目录 `AGENTS.md`（项目导航、入口、禁止事项）。
-10. 完成后删除旧 `install.sh`、`undefine.sh` 及 `templates/Ubuntu/` 下的脚本副本。
+- **字段名**：`level`
+- **取值**：`normal` / `production` / `protected`
+- **默认值**：`normal`（未配置时即按现状可直接删除）
+- **定义位置**：沿用项目现有三级合并约定，三处均可设
+  - `default.conf`：全局默认值
+  - `templates.conf`：模板级覆盖（适合把某类 OS 镜像整体设为 production/protected）
+  - `instances.conf`：实例级覆盖（最高优先级）
+- **合并优先级**：实例 > 模板 > default.conf，与现有字段一致
+- **未登记实例**（`create --template` 临时创建、destroy 同名域不在 instances.conf）：无 level 配置，按 `normal` 处理
 
-## 验收
+## 2. 各级别行为
 
-`uv run kvm-cloud-init templates|list` 正常；`uv run pytest` 全绿；旧脚本清理干净；文档与新行为一致。
+| level | destroy 行为 | create 检测到同名域存在时 |
+|---|---|---|
+| `normal` | 直接删除（维持现状） | 隐式销毁后重建（维持现状） |
+| `production` | 交互式确认，输入 `yes` 才继续；加 `--yes` 跳过确认 | 交互式确认，或加 `--yes` 跳过确认，或加 `--force` 强制删除旧实例后重建 |
+| `protected` | 直接拒绝并退出，提示需改配置（删字段或改回 normal）后重试 | 直接拒绝并退出，提示同上 |
+
+说明：
+- `protected` 在任何情况下都不被 `--yes` / `--force` 绕过，唯一解除方式是修改配置文件。
+- `production` 的交互确认仅对该级别生效；`normal` 不弹确认，`protected` 直接拒绝。
+- 交互确认在非 TTY 环境（如 CI / 管道输入 EOF）应安全失败：视为未确认，按拒绝处理并给出明确错误，避免脚本误删。
+
+## 3. CLI 参数变更
+
+- `create <实例名> [--template T] [--yes] [--force]`
+- `destroy <实例名> [--force] [--yes]`
+
+参数语义：
+- `--yes`：跳过 `production` 级别的交互式确认（对 `normal` 无影响、对 `protected` 无效）
+- `--force`：
+  - **destroy**：维持现有语义——优雅关机超时后强制断电。本需求不改变其原有含义。
+  - **create**：新增语义——当同名旧实例为 `production` 时，强制删除旧实例后重建（等价于跳过 production 确认）。
+
+> 待确认点：destroy 的 `--force`（强制断电）与 create 的 `--force`（强制删 production 旧实例）语义不同。是否需要为 destroy 也增加「`--force` 一并绕过 production 确认」的统一语义，留待下一步决定。当前按各自独立语义实现。
+
+## 4. 代码改动范围
+
+1. **`config.py`**
+   - `Defaults` / `Template` / `InstanceSpec` / `ResolvedInstance` 增加 `level: str` 字段
+   - 新增常量 `_VALID_LEVEL = ("normal", "production", "protected")`
+   - 新增校验：`_choice(raw["level"], _VALID_LEVEL, ...)`，大小写归一化（与现有 graphics/video 一致）
+   - `resolve()` 中按三级合并取最终 level（实例 > 模板 > 默认）
+   - 未知字段校验白名单加入 `level`
+2. **`provision.py`**
+   - `destroy_instance`：销毁前检查 level；`protected` 抛错；`production` 且未给 `yes` 时走交互确认
+   - `create_instance`：在隐式销毁同名域前检查 level；`protected` 抛错；`production` 按 `yes` / `force` 决定是否继续
+   - 交互确认逻辑抽成内部函数（便于测试 mock stdin）
+3. **`cli.py`**
+   - `create` 子命令新增 `--yes`、`--force` 参数并向下传递
+   - `destroy` 子命令新增 `--yes` 参数并向下传递（`--force` 已存在）
+4. **配置文件**
+   - `default.conf`：注释中补充 `level` 字段说明（不在文件中写默认值，保持 `normal` 为隐式默认）
+   - `templates.conf`：注释中补充 `level` 字段说明
+   - `instances.conf`：注释中补充 `level` 字段说明，并给出 production / protected 示例（注释形式）
+5. **测试 `tests/`**
+   - `test_config.py`：level 校验（非法值报错）、三级合并（实例覆盖模板覆盖默认）、未登记实例按 normal
+   - `test_cli.py`：`create --yes` / `create --force` / `destroy --yes` 参数透传
+   - `test_provision`（新增或并入现有）：destroy 对 protected 抛错、production 在未确认时拒绝、production 在 `--yes` 时通过、create 隐式销毁对 protected 抛错、create 隐式销毁 production 在 `--force` 时通过；交互确认用 monkeypatch mock stdin，禁止依赖真实 TTY
+6. **文档**
+   - `README.md`（中英双语）：配置字段说明、CLI 用法、各级别行为表
+   - `AGENTS.md` / `.trae/rules/project_rules.md`：同步 `level` 字段说明
+
+## 5. 不在本次范围
+
+- 不改变 `--force` 在 destroy 中的现有「强制断电」语义
+- 不引入新的配置文件位置或绕过 `config.py` 校验的旁路
+- 不对 cloud-init 文档做 YAML 深合并
+- 不改动存储卷命名规则与 libvirt 连接方式（仍 `qemu:///system`）
+
+## 6. 验收
+
+- `uv run pytest` 全绿，新增用例覆盖三级合并、各级别 destroy/create 行为、参数透传
+- `uv run kvm-cloud-init templates|list` 不受影响
+- 手动验证：production 实例 destroy 弹确认、protected 实例 destroy/create 被拒、`--yes` / `--force` 行为符合上表
+- README / AGENTS.md / project_rules.md / 三个 .conf 注释与实现一致
