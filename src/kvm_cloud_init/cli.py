@@ -26,6 +26,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--template",
         help="模板名；实例已在 instances.conf 登记时可用于覆盖其模板引用",
     )
+    create.add_argument(
+        "--yes",
+        action="store_true",
+        help="跳过 production 保护级别的交互式确认（对 protected 无效）",
+    )
+    create.add_argument(
+        "--force",
+        action="store_true",
+        help="同名旧实例为 production 时强制删除后重建（等价于 --yes）",
+    )
 
     destroy = sub.add_parser("destroy", help="销毁实例")
     destroy.add_argument("name", help="实例名")
@@ -33,6 +43,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="优雅关机超时后强制断电（默认超时则中止）",
+    )
+    destroy.add_argument(
+        "--yes",
+        action="store_true",
+        help="跳过 production 保护级别的交互式确认（对 protected 无效）",
     )
 
     sub.add_parser("list", help="列出已登记实例及 libvirt 中的域状态")
@@ -73,9 +88,18 @@ def main(argv: list[str] | None = None) -> int:
         conn = connect()
 
         if args.command == "create":
-            provision.create_instance(store, conn, args.name, args.template)
+            provision.create_instance(
+                store,
+                conn,
+                args.name,
+                args.template,
+                yes=args.yes,
+                force=args.force,
+            )
         elif args.command == "destroy":
-            provision.destroy_instance(store, conn, args.name, force=args.force)
+            provision.destroy_instance(
+                store, conn, args.name, force=args.force, yes=args.yes
+            )
         elif args.command == "list":
             rows = provision.list_instances(store, conn)
             _print_table(("实例名", "模板", "状态"), rows)

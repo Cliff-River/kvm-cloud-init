@@ -21,17 +21,36 @@ def test_templates_command(capsys) -> None:
 def test_create_dispatch(monkeypatch) -> None:
     calls = {}
 
-    def fake_create(store, conn, name, template_name=None):
-        calls.update(name=name, template=template_name)
+    def fake_create(store, conn, name, template_name=None, yes=False, force=False):
+        calls.update(name=name, template=template_name, yes=yes, force=force)
 
     monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
     monkeypatch.setattr(cli.provision, "create_instance", fake_create)
 
     assert cli.main(["create", "rocky-lvm"]) == 0
-    assert calls == {"name": "rocky-lvm", "template": None}
+    assert calls == {"name": "rocky-lvm", "template": None, "yes": False, "force": False}
 
     assert cli.main(["create", "adhoc", "--template", "Debian"]) == 0
-    assert calls == {"name": "adhoc", "template": "Debian"}
+    assert calls == {"name": "adhoc", "template": "Debian", "yes": False, "force": False}
+
+
+def test_create_yes_and_force_dispatch(monkeypatch) -> None:
+    calls = {}
+
+    def fake_create(store, conn, name, template_name=None, yes=False, force=False):
+        calls.update(yes=yes, force=force)
+
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(cli.provision, "create_instance", fake_create)
+
+    cli.main(["create", "rocky-lvm", "--yes"])
+    assert calls == {"yes": True, "force": False}
+
+    cli.main(["create", "rocky-lvm", "--force"])
+    assert calls == {"yes": False, "force": True}
+
+    cli.main(["create", "rocky-lvm", "--yes", "--force"])
+    assert calls == {"yes": True, "force": True}
 
 
 def test_destroy_dispatch(monkeypatch) -> None:
@@ -40,14 +59,32 @@ def test_destroy_dispatch(monkeypatch) -> None:
     monkeypatch.setattr(
         cli.provision,
         "destroy_instance",
-        lambda store, conn, name, force: calls.update(name=name, force=force),
+        lambda store, conn, name, force, yes: calls.update(
+            name=name, force=force, yes=yes
+        ),
     )
 
     assert cli.main(["destroy", "rocky-lvm"]) == 0
-    assert calls == {"name": "rocky-lvm", "force": False}
+    assert calls == {"name": "rocky-lvm", "force": False, "yes": False}
 
     assert cli.main(["destroy", "rocky-lvm", "--force"]) == 0
-    assert calls == {"name": "rocky-lvm", "force": True}
+    assert calls == {"name": "rocky-lvm", "force": True, "yes": False}
+
+
+def test_destroy_yes_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "destroy_instance",
+        lambda store, conn, name, force, yes: calls.update(force=force, yes=yes),
+    )
+
+    assert cli.main(["destroy", "rocky-lvm", "--yes"]) == 0
+    assert calls == {"force": False, "yes": True}
+
+    assert cli.main(["destroy", "rocky-lvm", "--yes", "--force"]) == 0
+    assert calls == {"force": True, "yes": True}
 
 
 def test_list_command(monkeypatch, capsys) -> None:

@@ -29,6 +29,11 @@ console script 入口：`kvm-cloud-init`。
 4. cloud-init 文档覆盖以整份文件为粒度，不做 YAML 深合并。
 5. 全部代码加类型注解；新增配置字段必须同步更新校验逻辑、配置示例与 README。
 6. 存储资源按实例命名：`<实例名>.qcow2`、`<实例名>-cidata.iso`。
+7. 删除保护 `level`（normal/production/protected，缺省 normal）随三级合并；
+   production 在 destroy/create 隐式销毁前需交互输入 yes（`--yes` 跳过，
+   create 的 `--force` 等价跳过，内部仍优雅关机），非 TTY 必须安全失败；
+   protected 对 `--yes`/`--force` 一律拒绝，只能改配置解除；把关逻辑在
+   provision.py，拒绝时抛 errors.ProtectionDenied，未登记实例按 normal。
 
 ## 常用命令
 
@@ -37,8 +42,8 @@ uv sync                  # 安装依赖
 uv run pytest            # 单元测试（无需 root/KVM）
 uv run kvm-cloud-init templates
 uv run kvm-cloud-init list
-uv run kvm-cloud-init create <实例名> [--template 模板]
-uv run kvm-cloud-init destroy <实例名> [--force]
+uv run kvm-cloud-init create <实例名> [--template 模板] [--yes] [--force]
+uv run kvm-cloud-init destroy <实例名> [--force] [--yes]
 ```
 
 ## 测试要求

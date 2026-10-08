@@ -58,10 +58,31 @@ uv run kvm-cloud-init destroy rocky-llm
 
 | Command | Description |
 | --- | --- |
-| `create <name> [--template T]` | Create the instance; a same-named domain is destroyed first. `--template` overrides the instance's template reference, or allows creating an unregistered instance. |
-| `destroy <name> [--force]` | Graceful shutdown (waits up to `shutdown_timeout` seconds), delete snapshots, undefine with NVRAM and all storage. `--force` powers off on timeout. |
+| `create <name> [--template T] [--yes] [--force]` | Create the instance; a same-named domain is destroyed first. `--template` overrides the instance's template reference, or allows creating an unregistered instance. `--yes` skips the `production` confirmation; `--force` forces removal of a `production` same-named instance (equivalent to `--yes` for that check). Neither works on `protected`. |
+| `destroy <name> [--force] [--yes]` | Graceful shutdown (waits up to `shutdown_timeout` seconds), delete snapshots, undefine with NVRAM and all storage. `--force` powers off on timeout; `--yes` skips the `production` confirmation. `protected` instances are always rejected. |
 | `list` | Configured instances plus any unregistered libvirt domains, with live state. |
 | `templates` | List templates from `templates.conf`. |
+
+## Deletion Protection
+
+The `level` field (`normal` / `production` / `protected`, default `normal`)
+can be set in any of the three config files with the usual precedence
+(instance > template > `default.conf`). Unregistered instances are treated as
+`normal`.
+
+| Level | `destroy` | `create` with a same-named domain |
+| --- | --- | --- |
+| `normal` | Delete immediately | Implicitly destroy, then recreate |
+| `production` | Interactive prompt; type `yes` to proceed, or pass `--yes` | Prompt, `--yes`, or `--force` to remove the old instance and recreate |
+| `protected` | Rejected; edit the config (remove `level` or set it back to `normal`) and retry | Rejected, same remedy |
+
+`protected` can never be bypassed with `--yes` / `--force` — editing the
+config file is the only way out. On a non-TTY (CI / piped EOF) the
+`production` prompt safely fails as "not confirmed" with an explicit error;
+use `--yes` in automation. Note that `--force` has independent meanings: on
+`destroy` it powers the VM off after the shutdown timeout, on `create` it
+only overrides the `production` confirmation (the implicit destroy still
+shuts down gracefully).
 
 ## Configuration
 
@@ -72,9 +93,12 @@ All three `.conf` files are YAML. Precedence:
 
 `storage_pool`, `image_dir`, `memory` (MiB), `vcpus`, `network`,
 `firmware` (`auto`/`uefi`/`bios`), `graphics` (`vnc`/`spice`/`none`),
-`video` (`auto`/`virtio`/`bochs`/`cirrus`/`qxl`), `shutdown_timeout` (seconds).
+`video` (`auto`/`virtio`/`bochs`/`cirrus`/`qxl`),
+`level` (`normal`/`production`/`protected`, implicit default `normal`),
+`shutdown_timeout` (seconds).
 `graphics: none` leaves the serial console only; `video: auto` omits the
-`<video>` element so libvirt/qemu picks its default model.
+`<video>` element so libvirt/qemu picks its default model. See
+[Deletion Protection](#deletion-protection) for `level` semantics.
 
 ### `templates.conf`
 
@@ -89,6 +113,7 @@ rocky:                                # template name, top-level key
   capacity: 100G                      # optional disk target size
   graphics: spice                     # optional: vnc/spice/none
   video: virtio                       # optional: auto/virtio/bochs/cirrus/qxl
+  level: production                   # optional: normal/production/protected
   user-data: |                        # optional inline override, per file
     #cloud-config
     ...
@@ -109,6 +134,7 @@ rocky-dev:              # instance name (= libvirt domain name), top-level key
   vcpus: 4
   capacity: 100G
   graphics: none        # optional: headless (serial only)
+  level: protected      # optional: normal/production/protected
   user-data: |          # whole-document replacement, no YAML deep merge
     #cloud-config
     ...
@@ -210,10 +236,28 @@ uv run kvm-cloud-init destroy rocky-llm
 
 | 命令 | 说明 |
 | --- | --- |
-| `create <名称> [--template T]` | 创建实例，同名域会先被销毁；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板 |
-| `destroy <名称> [--force]` | 优雅关机（等待 `shutdown_timeout` 秒）、删除快照、带 NVRAM undefine 并清理全部存储；`--force` 超时后强制断电 |
+| `create <名称> [--template T] [--yes] [--force]` | 创建实例，同名域会先被销毁；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板；`--yes` 跳过 production 确认；`--force` 强制删除 production 同名旧实例后重建（对该检查等价于 `--yes`）；二者对 protected 均无效 |
+| `destroy <名称> [--force] [--yes]` | 优雅关机（等待 `shutdown_timeout` 秒）、删除快照、带 NVRAM undefine 并清理全部存储；`--force` 超时后强制断电；`--yes` 跳过 production 确认；protected 实例始终被拒绝 |
 | `list` | 列出已登记实例与未登记的 libvirt 域及实时状态 |
 | `templates` | 列出 `templates.conf` 中定义的模板 |
+
+## 删除保护
+
+`level` 字段取值 `normal` / `production` / `protected`，缺省为 `normal`，
+可在三份配置文件的任意一处设置，仍按
+**实例 > 模板 > `default.conf`** 合并；未登记实例按 `normal` 处理。
+
+| 级别 | `destroy` | `create` 检测到同名域 |
+| --- | --- | --- |
+| `normal` | 直接删除 | 隐式销毁后重建 |
+| `production` | 交互提示，输入 `yes` 才继续，或加 `--yes` 跳过 | 交互确认，或加 `--yes` / `--force` 删除旧实例后重建 |
+| `protected` | 直接拒绝；需改配置（删除 `level` 或改回 `normal`）后重试 | 同样直接拒绝，解除方式相同 |
+
+`protected` 在任何情况下都无法被 `--yes` / `--force` 绕过，唯一解除方式是
+修改配置文件。非 TTY 环境（CI / 管道 EOF）下 production 的确认会安全失败，
+按未确认处理并给出明确错误，自动化场景请显式加 `--yes`。注意两个
+`--force` 语义相互独立：destroy 的 `--force` 是关机超时后强制断电，
+create 的 `--force` 只用于绕过 production 确认（隐式销毁仍走优雅关机）。
 
 ## 配置说明
 
@@ -224,9 +268,12 @@ uv run kvm-cloud-init destroy rocky-llm
 
 字段：`storage_pool`、`image_dir`、`memory`（MiB）、`vcpus`、`network`、
 `firmware`（`auto`/`uefi`/`bios`）、`graphics`（`vnc`/`spice`/`none`）、
-`video`（`auto`/`virtio`/`bochs`/`cirrus`/`qxl`）、`shutdown_timeout`（秒）。
+`video`（`auto`/`virtio`/`bochs`/`cirrus`/`qxl`）、
+`level`（`normal`/`production`/`protected`，隐式缺省 `normal`）、
+`shutdown_timeout`（秒）。
 `graphics: none` 表示无图形设备、仅保留串口控制台；`video: auto` 表示不写
-`<video>` 元素，由 libvirt/qemu 采用默认显卡型号。
+`<video>` 元素，由 libvirt/qemu 采用默认显卡型号。`level` 的行为见
+[删除保护](#删除保护)。
 
 ### `templates.conf`
 
@@ -241,6 +288,7 @@ rocky:                                # 模板名，顶层键
   capacity: 100G                      # 磁盘目标大小
   graphics: spice                     # 可选：vnc/spice/none
   video: virtio                       # 可选：auto/virtio/bochs/cirrus/qxl
+  level: production                   # 可选：normal/production/protected
   user-data: |                        # 可选内联覆盖，按文件粒度
     #cloud-config
     ...
@@ -261,6 +309,7 @@ rocky-dev:              # 实例名（即 libvirt 域名），顶层键
   vcpus: 4
   capacity: 100G
   graphics: none        # 可选：无图形，仅串口控制台
+  level: protected      # 可选：normal/production/protected
   user-data: |          # 整块替换，不做 YAML 深合并
     #cloud-config
     ...

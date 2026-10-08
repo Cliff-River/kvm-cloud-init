@@ -114,3 +114,71 @@ def test_image_path_resolution(store: ConfigStore) -> None:
     resolved = store.resolve("i1")
     assert resolved.image_path.name == "base.qcow2"
     assert resolved.image_path.is_absolute()
+
+
+def test_level_defaults_to_normal(store: ConfigStore) -> None:
+    # 已登记实例未配置 level
+    assert store.resolve("i1").level == "normal"
+    # 未登记的临时实例同样按 normal
+    assert store.resolve("adhoc", template_name="t1").level == "normal"
+
+
+def test_level_three_way_merge(project_dir) -> None:
+    (project_dir / "default.conf").write_text(
+        "storage_pool: default\n"
+        "image_dir: images\n"
+        "memory: 1024\n"
+        "vcpus: 2\n"
+        "network: default\n"
+        "firmware: auto\n"
+        "level: production\n"
+        "shutdown_timeout: 5\n"
+    )
+    (project_dir / "templates.conf").write_text(
+        "t1:\n  path: templates/t1\n  image: base.qcow2\n  level: protected\n"
+        "t2:\n  path: templates/t2\n  image: u.qcow2\n"
+    )
+    (project_dir / "instances.conf").write_text(
+        # 实例/模板都没设 -> default.conf 的 production
+        "from-default:\n  template: t2\n"
+        # 模板设 protected，实例未覆盖
+        "from-template:\n  template: t1\n"
+        # 实例 normal 覆盖模板 protected
+        "from-instance:\n  template: t1\n  level: normal\n"
+    )
+    store = ConfigStore.load(project_dir)
+    assert store.resolve("from-default").level == "production"
+    assert store.resolve("from-template").level == "protected"
+    assert store.resolve("from-instance").level == "normal"
+    # 未登记实例：模板 t1 为 protected
+    assert store.resolve("adhoc", template_name="t1").level == "protected"
+
+
+def test_level_case_normalized(project_dir) -> None:
+    (project_dir / "instances.conf").write_text(
+        "upper:\n  template: t1\n  level: PRODUCTION\n"
+    )
+    store = ConfigStore.load(project_dir)
+    assert store.resolve("upper").level == "production"
+
+
+@pytest.mark.parametrize(
+    ("filename", "body", "match"),
+    [
+        ("default.conf", "level: strict\n", "level"),
+        (
+            "templates.conf",
+            "t1:\n  path: templates/t1\n  image: b.qcow2\n  level: nope\n",
+            "level",
+        ),
+        (
+            "instances.conf",
+            "i1:\n  template: t1\n  level: nope\n",
+            "level",
+        ),
+    ],
+)
+def test_bad_level_rejected(project_dir, filename: str, body: str, match: str) -> None:
+    (project_dir / filename).write_text(body)
+    with pytest.raises(ConfigError, match=match):
+        ConfigStore.load(project_dir)
