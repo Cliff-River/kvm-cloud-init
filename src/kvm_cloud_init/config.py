@@ -27,8 +27,10 @@ _SCALAR_FIELDS = ("memory", "vcpus", "capacity")
 _VALID_FIRMWARE = ("auto", "uefi", "bios")
 _VALID_GRAPHICS = ("vnc", "spice", "none")
 _VALID_VIDEO = ("auto", "virtio", "bochs", "cirrus", "qxl")
-#: 模板/实例可覆盖的字符串型硬件选项
-_CHOICE_FIELDS = ("graphics", "video")
+#: 删除保护级别：normal 可直接删 / production 需确认 / protected 拒绝删除
+_VALID_LEVEL = ("normal", "production", "protected")
+#: 模板/实例可覆盖的字符串型枚举选项（graphics/video/level）
+_CHOICE_FIELDS = ("graphics", "video", "level")
 
 
 def project_root() -> Path:
@@ -46,6 +48,7 @@ class Defaults:
     firmware: str = "auto"
     graphics: str = "vnc"
     video: str = "auto"
+    level: str = "normal"
     shutdown_timeout: int = 120
 
 
@@ -63,6 +66,7 @@ class Template:
     capacity: str | None = None
     graphics: str | None = None
     video: str | None = None
+    level: str | None = None
     docs: dict[str, str] = field(default_factory=dict)
 
 
@@ -77,6 +81,7 @@ class InstanceSpec:
     capacity: str | None = None
     graphics: str | None = None
     video: str | None = None
+    level: str | None = None
     docs: dict[str, str] = field(default_factory=dict)
 
 
@@ -95,6 +100,7 @@ class ResolvedInstance:
     firmware: str
     graphics: str
     video: str
+    level: str
     shutdown_timeout: int
     storage_pool: str
 
@@ -164,6 +170,8 @@ def _parse_defaults(raw: dict[str, Any]) -> Defaults:
         defaults.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, "default.conf 的 graphics")
     if "video" in raw:
         defaults.video = _choice(raw["video"], _VALID_VIDEO, "default.conf 的 video")
+    if "level" in raw:
+        defaults.level = _choice(raw["level"], _VALID_LEVEL, "default.conf 的 level")
     if "shutdown_timeout" in raw:
         defaults.shutdown_timeout = _as_int(
             raw["shutdown_timeout"], "default.conf 的 shutdown_timeout"
@@ -205,6 +213,8 @@ def _parse_template(name: str, raw: Any) -> Template:
         tpl.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, f"模板 {name} 的 graphics")
     if raw.get("video") is not None:
         tpl.video = _choice(raw["video"], _VALID_VIDEO, f"模板 {name} 的 video")
+    if raw.get("level") is not None:
+        tpl.level = _choice(raw["level"], _VALID_LEVEL, f"模板 {name} 的 level")
     tpl.docs = _extract_docs(raw, f"模板 {name}")
     allowed = {
         "path", "image_dir", "image", "os_variant", "memory", "vcpus",
@@ -233,6 +243,8 @@ def _parse_instance(name: str, raw: Any) -> InstanceSpec:
         inst.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, f"实例 {name} 的 graphics")
     if raw.get("video") is not None:
         inst.video = _choice(raw["video"], _VALID_VIDEO, f"实例 {name} 的 video")
+    if raw.get("level") is not None:
+        inst.level = _choice(raw["level"], _VALID_LEVEL, f"实例 {name} 的 level")
     inst.docs = _extract_docs(raw, f"实例 {name}")
     allowed = {"template", *_SCALAR_FIELDS, *_CHOICE_FIELDS, *DOC_NAMES}
     unknown = set(raw) - allowed
@@ -326,6 +338,7 @@ class ConfigStore:
             firmware=self.defaults.firmware,
             graphics=pick("graphics"),
             video=pick("video"),
+            level=pick("level"),
             shutdown_timeout=self.defaults.shutdown_timeout,
             storage_pool=self.defaults.storage_pool,
         )

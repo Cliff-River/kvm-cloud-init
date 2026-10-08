@@ -31,3 +31,7 @@ class ShutdownTimeout(KciError):
 
 class ProvisionError(KciError):
     """创建 / 销毁流程中的其他运行时错误。"""
+
+
+class ProtectionDenied(ProvisionError):
+    """删除保护级别阻止了销毁 / 重建（protected，或 production 未确认）。"""

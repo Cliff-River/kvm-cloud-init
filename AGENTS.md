@@ -39,6 +39,10 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 ## 工作方式
 
 - 配置合并优先级：实例 > 模板 > default.conf；cloud-init 文档整块替换。
+- 删除保护字段 `level`（normal/production/protected，缺省 normal）同样三级合并；
+  destroy 与 create 的隐式销毁在 provision.py 统一把关：production 需交互输入
+  yes（`--yes` 跳过；create 还可用 `--force`，但内部仍走优雅关机），非 TTY
+  安全失败；protected 对任何标志都拒绝，只能改配置解除。未登记实例按 normal。
 - 创建：渲染文档 → 临时目录生成 cidata.iso（pycdlib）→ stream 上传镜像与
   ISO 到存储池（按实例命名卷）→ 可选卷扩容 → 构建 domain XML → define + start。
 - 销毁：优雅关机轮询 → 收集域/快照 XML 中外部文件并追 backing chain →
