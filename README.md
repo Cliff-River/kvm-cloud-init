@@ -1,12 +1,14 @@
-# kvm-cloud-init
+# KVM Cloud-init Factory · KVM Cloud-init 工厂
 
 **[English](#english) · [中文](#中文)**
 
-> 多模板、多实例的 KVM/libvirt 虚拟机管理工具，基于 cloud-init NoCloud，
+> 通过定义模板利用云镜像，快速创建、管理和销毁 KVM/libvirt 虚拟机，
+> 支持多模板、多实例；基于 cloud-init NoCloud，
 > 使用 Python（libvirt-python + pycdlib）实现。
 >
-> Multi-template, multi-instance KVM/libvirt VM manager driven by cloud-init
-> NoCloud, implemented in Python (libvirt-python + pycdlib).
+> Define templates to rapidly create, manage, and destroy KVM/libvirt VMs
+> from cloud images, with multi-template, multi-instance support. Driven by
+> cloud-init NoCloud, implemented in Python (libvirt-python + pycdlib).
 
 ---
 
@@ -30,6 +32,18 @@ libvirt API calls — there is no shelling out to `virsh` / `virt-install` /
   NAT network active.
 - Current user in the **libvirt** and **kvm** groups (log out and back in
   after adding).
+- **System build prerequisites (required):** `pkg-config` and the libvirt
+  development headers must be installed beforehand — `uv sync` compiles
+  `libvirt-python` from source and fails without them:
+
+  ```bash
+  # Debian / Ubuntu
+  sudo apt install -y pkg-config libvirt-dev
+  # Rocky / RHEL
+  sudo dnf install -y pkgconfig libvirt-devel
+  ```
+
+  Verify with `pkg-config --modversion libvirt` (should print a version).
 - OVMF firmware for UEFI guests (optional — the tool falls back to BIOS).
 - [uv](https://docs.astral.sh/uv/) and Python 3.13+.
 - qcow2 cloud images placed under `images/` (configurable).
@@ -208,6 +222,17 @@ OS 模板与实例通过 YAML 文件定义，一条命令即可渲染 cloud-init
 
 - Linux 主机：开启 KVM，`libvirtd` 运行中，`default` 存储池与 NAT 网络活动。
 - 当前用户属于 **libvirt** 与 **kvm** 组（加入后需重新登录）。
+- **系统级编译前置（必需）**：需预先安装 `pkg-config` 与 libvirt 开发头文件，
+  否则 `uv sync` 从源码编译 `libvirt-python` 时会失败：
+
+  ```bash
+  # Debian / Ubuntu
+  sudo apt install -y pkg-config libvirt-dev
+  # Rocky / RHEL
+  sudo dnf install -y pkgconfig libvirt-devel
+  ```
+
+  可用 `pkg-config --modversion libvirt` 验证（应输出版本号）。
 - UEFI 客户机需要 OVMF 固件（可选，缺失时回退 BIOS）。
 - 已安装 [uv](https://docs.astral.sh/uv/)，Python 3.13+。
 - qcow2 云镜像放在 `images/`（可配置）。
