@@ -32,15 +32,16 @@ libvirt API calls — there is no shelling out to `virsh` / `virt-install` /
   NAT network active.
 - Current user in the **libvirt** and **kvm** groups (log out and back in
   after adding).
-- **System build prerequisites (required):** `pkg-config` and the libvirt
-  development headers must be installed beforehand — `uv sync` compiles
-  `libvirt-python` from source and fails without them:
+- **System build prerequisites (required):** the compiler toolchain
+  (`build-essential`), `pkg-config`, and the libvirt development headers must
+  be installed beforehand — `uv sync` compiles `libvirt-python` from source
+  and fails without them:
 
   ```bash
   # Debian / Ubuntu
-  sudo apt install -y pkg-config libvirt-dev
+  sudo apt install -y build-essential pkg-config libvirt-dev
   # Rocky / RHEL
-  sudo dnf install -y pkgconfig libvirt-devel
+  sudo dnf install -y gcc make pkgconfig libvirt-devel
   ```
 
   Verify with `pkg-config --modversion libvirt` (should print a version).
@@ -222,17 +223,18 @@ OS 模板与实例通过 YAML 文件定义，一条命令即可渲染 cloud-init
 
 - Linux 主机：开启 KVM，`libvirtd` 运行中，`default` 存储池与 NAT 网络活动。
 - 当前用户属于 **libvirt** 与 **kvm** 组（加入后需重新登录）。
-- **系统级编译前置（必需）**：需预先安装 `pkg-config` 与 libvirt 开发头文件，
-  否则 `uv sync` 从源码编译 `libvirt-python` 时会失败：
+- **系统级编译前置（必需）**：需预先安装编译工具链（`build-essential`）、
+  `pkg-config` 与 libvirt 开发头文件，否则 `uv sync` 从源码编译
+  `libvirt-python` 时会失败：
 
-  ```bash
-  # Debian / Ubuntu
-  sudo apt install -y pkg-config libvirt-dev
-  # Rocky / RHEL
-  sudo dnf install -y pkgconfig libvirt-devel
-  ```
+``` bash
+# Debian / Ubuntu
+sudo apt install -y build-essential pkg-config libvirt-dev
+# Rocky / RHEL
+sudo dnf install -y gcc make pkgconfig libvirt-devel
+```
 
-  可用 `pkg-config --modversion libvirt` 验证（应输出版本号）。
+可用 `pkg-config --modversion libvirt` 验证（应输出版本号）。
 - UEFI 客户机需要 OVMF 固件（可选，缺失时回退 BIOS）。
 - 已安装 [uv](https://docs.astral.sh/uv/)，Python 3.13+。
 - qcow2 云镜像放在 `images/`（可配置）。
