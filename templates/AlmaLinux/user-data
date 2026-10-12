@@ -15,8 +15,8 @@ disable_root: false
 packages:
   - bash-completion
   - vim
-# runcmd:
-#   - [growpart, /dev/vda, 4]
-#   - [pvresize, /dev/vda4]
+runcmd:
+  - [growpart, /dev/vda, 4]
+  - [xfs_growfs, "/"]
 #   - [lvextend, "-l", "+100%FREE", "/dev/rocky/lvroot"]
 #   - [xfs_growfs, "/dev/rocky/lvroot"]
