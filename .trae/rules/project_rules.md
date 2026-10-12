@@ -15,6 +15,7 @@ console script 入口：`kvm-cloud-init`。
 - `qcow2.py`：qcow2 头解析、容量单位、backing chain（纯标准库）。
 - `hv/`：所有 libvirt 交互。`client`（连接/存储池）、`firmware`（UEFI 检测）、
   `storage`（卷上传/扩容/删除）、`domains`（关机/快照/undefine）、
+  `osinfo`（os-variant 到 libosinfo OS ID 的解析：本机 osinfo-db > 官方 GitLab 仓库 > 内置兜底）、
   `guest`（domain XML 生成与启动）。
 - `provision.py`：编排以上模块完成 create/destroy/list/templates。
 - `errors.py`：所有面向用户的异常，message 必须是可直接展示的中文。

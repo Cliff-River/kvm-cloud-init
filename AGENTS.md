@@ -32,6 +32,7 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 │       ├── firmware.py         # UEFI 检测（域能力 + 文件系统回退）
 │       ├── storage.py          # 卷 XML / stream 上传 / 扩容 / 删除
 │       ├── domains.py          # 关机、快照、残留收集、undefine
+│       ├── osinfo.py           # os-variant -> libosinfo OS ID 解析（本机库/官方仓库）
 │       └── guest.py            # domain XML 生成 + define/start
 └── tests/                      # pytest，全部 mock，不需要 root/KVM
 ```

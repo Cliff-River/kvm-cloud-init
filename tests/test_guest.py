@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from unittest.mock import patch
 
-from kvm_cloud_init.hv.guest import METADATA_NS, build_domain_xml
+from kvm_cloud_init.hv.guest import LIBOSINFO_NS, METADATA_NS, build_domain_xml
+
+# guest 测试只关心 XML 生成，osinfo 解析逻辑由 test_osinfo 覆盖；
+# 这里固定 resolve_os_id 的返回，避免触发本机扫描与网络请求。
+_FAKE_IDS = {
+    "rocky10": "http://rockylinux.org/rocky/10",
+    "ubuntu26.04": "http://ubuntu.com/ubuntu/26.04",
+    "debian13": "http://debian.org/debian/13",
+    "almalinux10": "http://almalinux.org/almalinux/10",
+    "centos9": "http://centos.org/centos/9",
+}
+
+
+def _fake_resolve(short_id: str) -> str | None:
+    return _FAKE_IDS.get(short_id)
+
+
+def _build_xml(**kwargs) -> str:
+    with patch("kvm_cloud_init.hv.guest.resolve_os_id", side_effect=_fake_resolve):
+        return build_domain_xml(**kwargs)
 
 
 def _build() -> str:
-    return build_domain_xml(
+    return _build_xml(
         name="vm1",
         disk_path="/pool/vm1.qcow2",
         iso_path="/pool/vm1-cidata.iso",
@@ -38,7 +58,7 @@ def test_firmware_and_boot() -> None:
     assert os_el.find("boot").get("dev") == "hd"
 
     bios = ET.fromstring(
-        build_domain_xml(
+        _build_xml(
             name="b", disk_path="/d.qcow2", iso_path="/c.iso",
             memory_mib=1, vcpus=1, network="n", firmware="bios",
             os_variant="debian13", template_name="t",
@@ -92,7 +112,7 @@ def _build_with(**kwargs) -> ET.Element:
         template_name="Rocky-LVM",
     )
     defaults.update(kwargs)
-    return ET.fromstring(build_domain_xml(**defaults))
+    return ET.fromstring(_build_xml(**defaults))
 
 
 def test_graphics_spice() -> None:
@@ -119,3 +139,42 @@ def test_metadata() -> None:
     config = root.find(f".//{{{METADATA_NS}}}config")
     assert config.findtext(f"{{{METADATA_NS}}}template") == "Rocky-LVM"
     assert config.findtext(f"{{{METADATA_NS}}}os-variant") == "rocky10"
+
+
+def test_metadata_libosinfo_rocky() -> None:
+    xml_str = _build()
+    # xmlns:libosinfo 声明必须落在 libosinfo 元素自身上
+    assert (
+        '<libosinfo:libosinfo xmlns:libosinfo='
+        '"http://libosinfo.org/xmlns/libvirt/domain/1.0">'
+    ) in xml_str
+    root = ET.fromstring(xml_str)
+    libosinfo = root.find(f".//{{{LIBOSINFO_NS}}}libosinfo")
+    assert libosinfo is not None
+    os_el = libosinfo.find(f"{{{LIBOSINFO_NS}}}os")
+    assert os_el.get("id") == "http://rockylinux.org/rocky/10"
+
+
+def test_metadata_libosinfo_variants() -> None:
+    variants = {
+        "ubuntu26.04": "http://ubuntu.com/ubuntu/26.04",
+        "debian13": "http://debian.org/debian/13",
+        "almalinux10": "http://almalinux.org/almalinux/10",
+    }
+    for variant, expected in variants.items():
+        root = _build_with(os_variant=variant)
+        os_el = root.find(f".//{{{LIBOSINFO_NS}}}libosinfo/{{{LIBOSINFO_NS}}}os")
+        assert os_el.get("id") == expected
+
+
+def test_metadata_libosinfo_derived() -> None:
+    # 未登记的 variant 走发行版前缀推导
+    root = _build_with(os_variant="centos9")
+    os_el = root.find(f".//{{{LIBOSINFO_NS}}}libosinfo/{{{LIBOSINFO_NS}}}os")
+    assert os_el.get("id") == "http://centos.org/centos/9"
+
+
+def test_metadata_libosinfo_unknown_omitted() -> None:
+    # 无法识别的 os-variant 不生成 libosinfo 节点
+    root = _build_with(os_variant="totally-unknown-99")
+    assert root.find(f".//{{{LIBOSINFO_NS}}}libosinfo") is None

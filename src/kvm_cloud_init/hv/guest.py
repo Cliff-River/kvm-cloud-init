@@ -12,6 +12,8 @@ import xml.etree.ElementTree as ET
 
 import libvirt
 
+from .osinfo import LIBOSINFO_NS, resolve_os_id
+
 METADATA_NS = "https://raw.githubusercontent.com/kvm-cloud-init/schema/v1"
 
 
@@ -37,13 +39,21 @@ def build_domain_xml(
 ) -> str:
     """生成与原 virt-install 参数等价的域 XML。"""
     ET.register_namespace("kci", METADATA_NS)
+    ET.register_namespace("libosinfo", LIBOSINFO_NS)
     domain = ET.Element("domain", {"type": "kvm"})
     _sub(domain, "name", name)
 
     metadata = ET.SubElement(domain, "metadata")
+    metadata.set("xmlns:kci", METADATA_NS)
     config = ET.SubElement(metadata, f"{{{METADATA_NS}}}config")
     _sub(config, f"{{{METADATA_NS}}}template", template_name)
     _sub(config, f"{{{METADATA_NS}}}os-variant", os_variant)
+
+    os_id = resolve_os_id(os_variant)
+    if os_id:
+        libosinfo = ET.SubElement(metadata, f"{{{LIBOSINFO_NS}}}libosinfo")
+        libosinfo.set("xmlns:libosinfo", LIBOSINFO_NS)
+        _sub(libosinfo, f"{{{LIBOSINFO_NS}}}os", id=os_id)
 
     _sub(domain, "memory", str(memory_mib), unit="MiB")
     _sub(domain, "vcpu", str(vcpus), placement="static")
@@ -103,7 +113,15 @@ def build_domain_xml(
     _sub(rng, "backend", "/dev/urandom", model="random")
 
     rough = ET.tostring(domain, encoding="unicode")
-    return xml.dom.minidom.parseString(rough).toprettyxml(indent="  ")
+    dom = xml.dom.minidom.parseString(rough)
+    # ElementTree 会把所有命名空间声明提升到根元素；这里把 kci/libosinfo 的声明
+    # 留在各自的子元素上（metadata / libosinfo），移除根元素上的冗余副本。
+    root = dom.documentElement
+    if root.hasAttribute("xmlns:kci"):
+        root.removeAttribute("xmlns:kci")
+    if root.hasAttribute("xmlns:libosinfo"):
+        root.removeAttribute("xmlns:libosinfo")
+    return dom.toprettyxml(indent="  ")
 
 
 def define_and_start(conn: libvirt.virConnect, xml_desc: str) -> libvirt.virDomain:
