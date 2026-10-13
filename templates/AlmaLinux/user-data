@@ -17,6 +17,6 @@ packages:
   - vim
 runcmd:
   - [growpart, /dev/vda, 4]
-  - [xfs_growfs, "/"]
+  - [xfs_growfs, /]
 #   - [lvextend, "-l", "+100%FREE", "/dev/rocky/lvroot"]
 #   - [xfs_growfs, "/dev/rocky/lvroot"]
