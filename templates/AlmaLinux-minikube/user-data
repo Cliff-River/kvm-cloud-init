@@ -1,0 +1,92 @@
+#cloud-config
+# AlmaLinux 10 + Docker CE + Minikube（docker 驱动，无需嵌套虚拟化）
+ssh_pwauth: true
+users:
+  - name: cliff
+    groups: sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+chpasswd:
+  list: |
+    root:sec202609
+    cliff:sec202609
+  expire: false
+disable_root: false
+package_update: true
+packages:
+  - bash-completion
+  - vim
+  - curl
+  - tar
+  - conntrack-tools
+write_files:
+  # kubectl 由 minikube 托管（minikube kubectl -- ...），包一层可直接 kubectl
+  - path: /usr/local/bin/kubectl
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      exec /usr/local/bin/minikube kubectl -- "$@"
+  # docker 的 cgroup driver 与 systemd 对齐（kubelet 推荐配置）
+  - path: /etc/docker/daemon.json
+    permissions: '0644'
+    content: |
+      {
+        "exec-opts": ["native.cgroupdriver=systemd"]
+      }
+  # 重启后以 cliff 身份拉起 / 停止 minikube 集群
+  - path: /etc/systemd/system/minikube.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Minikube (docker driver)
+      Requires=docker.service
+      After=docker.service network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      User=cliff
+      Group=cliff
+      Environment=HOME=/home/cliff
+      TimeoutStartSec=900
+      # 国内可达性说明：--image-mirror-country=cn 的二进制镜像站缺少 .sha256
+      # 校验文件（minikube 强校验必失败），故不用；k8s 二进制走官方 dl.k8s.io
+      # （国内可直连），kicbase 与 k8s 组件镜像走 DaoCloud 的 gcr/registry.k8s.io 镜像。
+      # kicbase 标签与 minikube v1.39.0 默认基座（v0.0.51）对齐。
+      ExecStart=/usr/local/bin/minikube start --driver=docker --cpus=2 --memory=2048mb --base-image=gcr.m.daocloud.io/k8s-minikube/kicbase:v0.0.51 --image-repository=k8s.m.daocloud.io
+      ExecStop=/usr/local/bin/minikube stop
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - [growpart, /dev/vda, 4]
+  - [xfs_growfs, /]
+  # GenericCloud 镜像不自带 kernel-modules-extra，docker 建网桥需要的
+  # xt_addrtype 内核模块在其中；先升级内核再安装同名版本的 modules-extra，
+  # 然后重启使新内核生效（docker 在重启前无法启动，属预期）。
+  - [dnf, -y, update, kernel, kernel-core, kernel-modules, kernel-modules-core]
+  - [dnf, -y, install, kernel-modules-extra]
+  # 安装 Docker CE
+  # 注意：Docker 官方 alma 仓库的 el10 目录未发布 docker-ce/docker-ce-cli
+  # （仅有 containerd.io 与插件），el10 的 docker-ce 只发在 centos/rhel 仓库，
+  # 故此处使用 centos 仓库（$releasever 在 AlmaLinux 10 上解析为 10）。
+  - [dnf, -y, install, dnf-plugins-core]
+  - [dnf, config-manager, --add-repo, https://download.docker.com/linux/centos/docker-ce.repo]
+  - [sh, -c, "dnf -y remove podman buildah || true"]
+  - [dnf, -y, install, docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+  # 只 enable 不 start：旧内核缺 xt_addrtype，重启进入新内核后 docker 自启
+  - [systemctl, enable, docker]
+  # docker 组由 docker-ce 安装时创建，随后再加入 cliff
+  - [usermod, -aG, docker, cliff]
+  # 安装 minikube：GitHub 直连，失败时依次回退国内加速代理
+  - [sh, -c, "for u in 'https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64' 'https://ghfast.top/https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64' 'https://gh-proxy.com/https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64'; do curl -fL --retry 3 --connect-timeout 15 -o /usr/local/bin/minikube \"$u\" && break; done && chmod +x /usr/local/bin/minikube"]
+  # 集群由 minikube.service 在重启后自动拉起（首启拉镜像较慢，属预期）
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, minikube.service]
+# 全部就绪后重启一次：进入带 xt_addrtype 的新内核，docker 与 minikube 随之自启
+power_state:
+  mode: reboot
+  delay: now
+  timeout: 600
+  message: "reboot to load kernel-modules-extra for docker"
