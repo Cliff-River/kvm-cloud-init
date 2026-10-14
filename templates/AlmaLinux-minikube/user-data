@@ -57,11 +57,13 @@ runcmd:
   - [ sudo, systemctl, enable, --now, docker ]
   - [ /usr/sbin/usermod, -aG, docker, cliff ]
   # 安装 Minikube
-  - [ curl, -fLO,
+  - [ 
+      curl, -fLO,
       --retry, 100, --retry-all-errors,
       --retry-delay, 5, --retry-max-time, 600,
       --connect-timeout, 60,
-      https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64 ]
+      https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64 
+    ]
   - [ install, minikube-linux-amd64, /usr/local/bin/minikube ]
   - [ rm, minikube-linux-amd64 ]
   # 安装 kubectl 二进制文件
@@ -69,8 +71,10 @@ runcmd:
     export KUBECTL_VERSION=$(curl --retry 100 --retry-all-errors
     --retry-delay 5 --retry-max-time 600 --connect-timeout 60
     -L -s https://dl.k8s.io/release/stable.txt)
-  - >
-    curl -LO --retry 100 --retry-all-errors --retry-delay 5 --retry-max-time 600
-    --connect-timeout 60 "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+  - [ 
+      curl, -LO, --retry, 100, --retry-all-errors, 
+      --retry-delay, 5, --retry-max-time, 600, --connect-timeout, 60, 
+      "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl" 
+    ]
   - [ export, KUBECTL_VERSION= ]
   - [ install, -o, root, -g, root, -m, "0755", kubectl, /usr/local/bin/kubectl ]
