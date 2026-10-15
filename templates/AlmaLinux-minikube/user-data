@@ -25,7 +25,7 @@ write_files:
     permissions: '0644'
     content: |
       [Unit]
-      Description=Minikube (docker driver)
+      Description=Minikube
       Requires=docker.service
       After=docker.service network-online.target
 
@@ -36,11 +36,7 @@ write_files:
       Group=cliff
       Environment=HOME=/home/cliff
       TimeoutStartSec=900
-      # 国内可达性说明：--image-mirror-country=cn 的二进制镜像站缺少 .sha256
-      # 校验文件（minikube 强校验必失败），故不用；k8s 二进制走官方 dl.k8s.io
-      # （国内可直连），kicbase 与 k8s 组件镜像走 DaoCloud 的 gcr/registry.k8s.io 镜像。
-      # kicbase 标签与 minikube v1.39.0 默认基座（v0.0.51）对齐。
-      ExecStart=/usr/local/bin/minikube start --driver=docker --cpus=2 --memory=2048mb --base-image=gcr.m.daocloud.io/k8s-minikube/kicbase:v0.0.51 --image-repository=k8s.m.daocloud.io
+      ExecStart=/usr/local/bin/minikube start
       ExecStop=/usr/local/bin/minikube stop
 
       [Install]
