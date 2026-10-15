@@ -11,7 +11,7 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 ## 目录结构
 
 ```
-├── pyproject.toml              # uv 项目；console script: kvm-cloud-init
+├── pyproject.toml              # uv 项目；console script: kvmci
 ├── default.conf                # 全局默认值（YAML）
 ├── templates.conf              # OS 模板定义（YAML）
 ├── instances.conf              # 实例定义（YAML）
@@ -55,8 +55,8 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 ```bash
 uv sync
 uv run pytest
-uv run kvm-cloud-init templates
-uv run kvm-cloud-init list
+uv run kvmci templates
+uv run kvmci list
 ```
 
 改动后至少保证 `uv run pytest` 全绿；改了配置字段或 CLI 行为要同步

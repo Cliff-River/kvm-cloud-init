@@ -77,6 +77,6 @@
 ## 6. 验收
 
 - `uv run pytest` 全绿，新增用例覆盖三级合并、各级别 destroy/create 行为、参数透传
-- `uv run kvm-cloud-init templates|list` 不受影响
+- `uv run kvmci templates|list` 不受影响
 - 手动验证：production 实例 destroy 弹确认、protected 实例 destroy/create 被拒、`--yes` / `--force` 行为符合上表
 - README / AGENTS.md / project_rules.md / 三个 .conf 注释与实现一致

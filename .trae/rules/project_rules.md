@@ -3,7 +3,7 @@
 ## 项目定位
 
 多模板 / 多实例 KVM 虚拟机管理工具。Python 3.13，src 布局，uv 管理依赖，
-console script 入口：`kvm-cloud-init`。
+console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 
 ## 架构边界（不要越层）
 
@@ -41,10 +41,10 @@ console script 入口：`kvm-cloud-init`。
 ```bash
 uv sync                  # 安装依赖
 uv run pytest            # 单元测试（无需 root/KVM）
-uv run kvm-cloud-init templates
-uv run kvm-cloud-init list
-uv run kvm-cloud-init create <实例名> [--template 模板] [--yes] [--force]
-uv run kvm-cloud-init destroy <实例名> [--force] [--yes]
+uv run kvmci templates
+uv run kvmci list
+uv run kvmci create <实例名> [--template 模板] [--yes] [--force]
+uv run kvmci destroy <实例名> [--force] [--yes]
 ```
 
 ## 测试要求
