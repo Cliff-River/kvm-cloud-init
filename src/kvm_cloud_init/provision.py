@@ -149,8 +149,14 @@ def create_instance(
         )
 
     firmware_mode = firmware.choose_firmware(resolved.firmware, conn)
+    uefi_pair = (
+        firmware.resolve_plain_uefi_pair() if firmware_mode == "efi" else None
+    )
     if firmware_mode == "efi":
-        print("使用 UEFI 启动。")
+        if uefi_pair is not None:
+            print(f"使用 UEFI 启动（固件 {uefi_pair[0]}，无安全启动）。")
+        else:
+            print("使用 UEFI 启动（未找到普通 OVMF 描述符，交由 libvirt 自动选择）。")
     else:
         print("未检测到 OVMF，使用 BIOS 启动。")
 
@@ -166,6 +172,8 @@ def create_instance(
         template_name=resolved.template.name,
         graphics=resolved.graphics,
         video=resolved.video,
+        loader=uefi_pair[0] if uefi_pair is not None else None,
+        nvram_template=uefi_pair[1] if uefi_pair is not None else None,
     )
     guest.define_and_start(conn, xml_desc)
     print(f"实例 {name} 已创建并启动（模板 {resolved.template.name}）。")

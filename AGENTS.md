@@ -29,7 +29,7 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 │   ├── errors.py               # KciError 体系（中文用户信息）
 │   └── hv/                     # libvirt 交互子包（勿命名为 libvirt）
 │       ├── client.py           # qemu:///system 连接、存储池
-│       ├── firmware.py         # UEFI 检测（域能力 + 文件系统回退）
+│       ├── firmware.py         # UEFI 检测 + 普通 OVMF CODE/VARS 解析（域能力/描述符/文件系统）
 │       ├── storage.py          # 卷 XML / stream 上传 / 扩容 / 删除
 │       ├── domains.py          # 关机、快照、残留收集、undefine
 │       ├── osinfo.py           # os-variant -> libosinfo OS ID 解析（本机库/官方仓库）
