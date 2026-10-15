@@ -15,7 +15,7 @@ from .hv.client import connect
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="kvm-cloud-init",
+        prog="kvmci",
         description="基于 cloud-init 的多模板 / 多实例 KVM 虚拟机管理工具",
     )
     sub = parser.add_subparsers(dest="command", required=True)

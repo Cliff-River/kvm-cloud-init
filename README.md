@@ -60,13 +60,13 @@ uv sync
 ```bash
 # 1. Review/edit the config files and templates/<name>/{meta-data,network-config,user-data}
 # 2. List available templates
-uv run kvm-cloud-init templates
+uv run kvmci templates
 # 3. Create an instance defined in instances.conf (idempotent)
-uv run kvm-cloud-init create rocky-llm
+uv run kvmci create rocky-llm
 # 4. Inspect
-uv run kvm-cloud-init list
+uv run kvmci list
 # 5. Destroy
-uv run kvm-cloud-init destroy rocky-llm
+uv run kvmci destroy rocky-llm
 ```
 
 ## CLI
@@ -252,13 +252,13 @@ uv sync
 ```bash
 # 1. 检查/编辑配置文件与 templates/<名称>/ 下的 cloud-init 三件套
 # 2. 查看可用模板
-uv run kvm-cloud-init templates
+uv run kvmci templates
 # 3. 创建 instances.conf 中定义的实例（幂等，可重复执行）
-uv run kvm-cloud-init create rocky-llm
+uv run kvmci create rocky-llm
 # 4. 查看状态
-uv run kvm-cloud-init list
+uv run kvmci list
 # 5. 销毁
-uv run kvm-cloud-init destroy rocky-llm
+uv run kvmci destroy rocky-llm
 ```
 
 ## 命令
