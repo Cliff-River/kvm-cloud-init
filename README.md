@@ -171,7 +171,9 @@ can coexist — give them distinct hostnames/IPs in their own `network-config`
    streams; `capacity` is applied via the storage volume resize API.
 4. The domain XML is built directly (virtio disk/NIC, SATA CD-ROM, VNC/serial
    console, host-passthrough CPU) and the persistent domain is defined and
-   started. UEFI uses libvirt firmware auto-selection with BIOS fallback.
+   started. UEFI explicitly uses the plain (non-Secure-Boot) OVMF pair
+   resolved from QEMU firmware descriptors, with BIOS fallback when OVMF is
+   unavailable.
 5. Destroying shuts the domain down gracefully, deletes snapshots, undefines
    with NVRAM, and removes external-snapshot overlays, memory-state files and
    backing-chain base images via structured XML parsing.
@@ -354,8 +356,9 @@ rocky-dev:              # 实例名（即 libvirt 域名），顶层键
 3. qcow2 镜像与种子 ISO 通过 libvirt stream 上传到存储池；`capacity` 通过
    存储卷扩容 API 生效。
 4. 直接构建 domain XML（virtio 磁盘/网卡、SATA 光驱、VNC/串口控制台、
-   host-passthrough CPU），定义持久域并启动；UEFI 走 libvirt 固件自动选择，
-   缺失时回退 BIOS。
+   host-passthrough CPU），定义持久域并启动；UEFI 显式使用从 QEMU 固件
+   描述符解析出的无安全启动普通 OVMF（CODE + VARS 模板），缺失 OVMF 时
+   回退 BIOS。
 5. 销毁时优雅关机、删除快照、带 NVRAM undefine，并通过结构化 XML 解析清理
    外部快照 overlay、内存状态文件及 backing chain 上的基础镜像。
 

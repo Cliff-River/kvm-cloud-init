@@ -1,8 +1,11 @@
 """domain XML 生成与启动（替代 virt-install --import --noautoconsole）。
 
 virtinst 未发布到 PyPI，而它对 --import 场景做的事本质上就是拼装一份
-domain XML 再调用 libvirt API；这里直接用 xml.etree 生成等价 XML，
-firmware='efi' 交给 libvirt 按固件描述符自动选择 OVMF 与 NVRAM 模板。
+domain XML 再调用 libvirt API；这里直接用 xml.etree 生成等价 XML。
+UEFI 下显式写入无安全启动的普通 OVMF loader/NVRAM 模板（路径由
+firmware.resolve_plain_uefi_pair 从固件描述符解析），避免 libvirt 自动
+打分挑中 OVMF_CODE_4M.ms.fd 等带安全启动/预置证书的固件；未解析到路径
+时只保留 firmware='efi'，交回 libvirt 自动选择。
 """
 
 from __future__ import annotations
@@ -36,8 +39,15 @@ def build_domain_xml(
     template_name: str,
     graphics: str = "vnc",
     video: str = "auto",
+    loader: str | None = None,
+    nvram_template: str | None = None,
 ) -> str:
-    """生成与原 virt-install 参数等价的域 XML。"""
+    """生成与原 virt-install 参数等价的域 XML。
+
+    ``loader``/``nvram_template`` 为普通（无安全启动）OVMF 的 CODE 与 VARS
+    模板路径；仅在 firmware 为 efi 且二者齐全时写入，libvirt 会把模板复制
+    为每实例独立的运行时 NVRAM。
+    """
     ET.register_namespace("kci", METADATA_NS)
     ET.register_namespace("libosinfo", LIBOSINFO_NS)
     domain = ET.Element("domain", {"type": "kvm"})
@@ -60,6 +70,10 @@ def build_domain_xml(
 
     os_el = _sub(domain, "os", firmware=firmware)
     _sub(os_el, "type", "hvm", arch="x86_64", machine="q35")
+    if firmware == "efi" and loader and nvram_template:
+        # 显式指定无安全启动的普通 OVMF，避免 libvirt 自动选中 ms/secboot 版
+        _sub(os_el, "loader", loader, readonly="yes", type="pflash", format="raw")
+        _sub(os_el, "nvram", template=nvram_template)
     _sub(os_el, "boot", dev="hd")
 
     features = _sub(domain, "features")

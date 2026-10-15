@@ -67,6 +67,45 @@ def test_firmware_and_boot() -> None:
     assert bios.get("firmware") == "bios"
 
 
+def test_uefi_without_pair_omits_loader() -> None:
+    # 未解析到普通 OVMF 时不写 loader/nvram，交回 libvirt 自动选择
+    os_el = ET.fromstring(_build()).find("os")
+    assert os_el.find("loader") is None
+    assert os_el.find("nvram") is None
+
+
+def test_uefi_explicit_plain_loader_nvram() -> None:
+    root = _build_with(
+        loader="/usr/share/OVMF/OVMF_CODE_4M.fd",
+        nvram_template="/usr/share/OVMF/OVMF_VARS_4M.fd",
+    )
+    os_el = root.find("os")
+    loader = os_el.find("loader")
+    nvram = os_el.find("nvram")
+    assert loader is not None
+    assert loader.text == "/usr/share/OVMF/OVMF_CODE_4M.fd"
+    assert loader.get("readonly") == "yes"
+    assert loader.get("type") == "pflash"
+    assert loader.get("format") == "raw"
+    assert nvram is not None
+    assert nvram.get("template") == "/usr/share/OVMF/OVMF_VARS_4M.fd"
+    # 元素顺序必须为 type -> loader -> nvram -> boot
+    tags = [child.tag for child in os_el]
+    assert tags.index("type") < tags.index("loader") < tags.index("nvram")
+    assert tags.index("nvram") < tags.index("boot")
+
+
+def test_bios_ignores_loader_pair() -> None:
+    root = _build_with(
+        firmware="bios",
+        loader="/usr/share/OVMF/OVMF_CODE_4M.fd",
+        nvram_template="/usr/share/OVMF/OVMF_VARS_4M.fd",
+    )
+    os_el = root.find("os")
+    assert os_el.find("loader") is None
+    assert os_el.find("nvram") is None
+
+
 def test_devices() -> None:
     root = ET.fromstring(_build())
     disks = root.findall("./devices/disk")
