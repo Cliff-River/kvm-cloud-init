@@ -33,5 +33,13 @@ class ProvisionError(KciError):
     """创建 / 销毁流程中的其他运行时错误。"""
 
 
+class NetworkError(KciError):
+    """无法确定虚拟机的实际 IP 地址（不信 network-config 声明值）。"""
+
+
+class SshError(KciError):
+    """SSH 密钥缺失 / 连接失败等与远程登录相关的错误。"""
+
+
 class ProtectionDenied(ProvisionError):
     """删除保护级别阻止了销毁 / 重建（protected，或 production 未确认）。"""

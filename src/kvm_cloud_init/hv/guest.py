@@ -41,12 +41,16 @@ def build_domain_xml(
     video: str = "auto",
     loader: str | None = None,
     nvram_template: str | None = None,
+    ssh_user: str | None = None,
 ) -> str:
     """生成与原 virt-install 参数等价的域 XML。
 
     ``loader``/``nvram_template`` 为普通（无安全启动）OVMF 的 CODE 与 VARS
     模板路径；仅在 firmware 为 efi 且二者齐全时写入，libvirt 会把模板复制
     为每实例独立的运行时 NVRAM。
+
+    ``ssh_user`` 记录本实例的 SSH 登录用户，供 ``kvmci shell`` / ``kvmci exec``
+    在连接时读取。
     """
     ET.register_namespace("kci", METADATA_NS)
     ET.register_namespace("libosinfo", LIBOSINFO_NS)
@@ -58,6 +62,8 @@ def build_domain_xml(
     config = ET.SubElement(metadata, f"{{{METADATA_NS}}}config")
     _sub(config, f"{{{METADATA_NS}}}template", template_name)
     _sub(config, f"{{{METADATA_NS}}}os-variant", os_variant)
+    if ssh_user:
+        _sub(config, f"{{{METADATA_NS}}}ssh-user", ssh_user)
 
     os_id = resolve_os_id(os_variant)
     if os_id:
@@ -143,3 +149,14 @@ def define_and_start(conn: libvirt.virConnect, xml_desc: str) -> libvirt.virDoma
     dom = conn.defineXML(xml_desc)
     dom.createWithFlags(0)
     return dom
+
+
+def domain_ssh_user(dom: libvirt.virDomain) -> str | None:
+    """从域 XML 的 kci 元数据读取 SSH 登录用户。"""
+    root = ET.fromstring(dom.XMLDesc(0))
+    element = root.find(
+        f".//{{{METADATA_NS}}}config/{{{METADATA_NS}}}ssh-user"
+    )
+    if element is None or not element.text:
+        return None
+    return element.text

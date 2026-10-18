@@ -9,8 +9,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from .config import DOC_NAMES, REQUIRED_DOCS, ConfigStore, ResolvedInstance
 from .errors import ConfigError
+
+#: cloud-config 文档固定头
+CLOUD_CONFIG_HEADER = "#cloud-config"
+#: 模板未定义非 root 用户时，运行时新增的 SSH 登录用户
+DEFAULT_SSH_USER = "cliff"
 
 
 def render_docs(store: ConfigStore, resolved: ResolvedInstance) -> dict[str, str]:
@@ -47,3 +54,68 @@ def write_docs(docs: dict[str, str], directory: Path) -> dict[str, Path]:
         path.write_text(content, encoding="utf-8")
         written[name] = path
     return written
+
+
+def _load_cloud_config(user_data: str, context: str) -> dict:
+    """把合并后 user-data 解析为 cloud-config 映射。"""
+    if not user_data.lstrip().startswith(CLOUD_CONFIG_HEADER):
+        raise ConfigError(
+            f"{context} 不是 #cloud-config 文档，无法注入 SSH 公钥；"
+            "请把 user-data 改为 cloud-config 格式后重试"
+        )
+    try:
+        data = yaml.safe_load(user_data)
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{context} 的 user-data 不是合法 YAML：{exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"{context} 的 user-data 顶层结构必须是键值映射")
+    return data
+
+
+def inject_ssh_access(user_data: str, public_key: str) -> tuple[str, str]:
+    """运行时把公钥注入合并后 user-data，返回 (新文档, 登录用户名)。
+
+    - 选用 ``users`` 中第一个非 root 用户；不存在则新增 ``cliff``（sudo 组）。
+    - 公钥**追加**到该用户的 ``ssh_authorized_keys``，不覆盖既有公钥。
+    """
+    data = _load_cloud_config(user_data, "实例")
+    users = data.get("users")
+    if users is None:
+        users = []
+        data["users"] = users
+    if not isinstance(users, list):
+        raise ConfigError("user-data 的 users 必须是列表")
+
+    target: dict | None = None
+    login_user: str | None = None
+    for entry in users:
+        if isinstance(entry, dict) and str(entry.get("name", "")) != "root":
+            target = entry
+            login_user = str(entry["name"])
+            break
+
+    if target is None:
+        login_user = DEFAULT_SSH_USER
+        target = {
+            "name": DEFAULT_SSH_USER,
+            "groups": ["sudo"],
+            "sudo": "ALL=(ALL) NOPASSWD:ALL",
+            "lock_passwd": False,
+            "shell": "/bin/bash",
+        }
+        users.append(target)
+
+    authorized = target.setdefault("ssh_authorized_keys", [])
+    if not isinstance(authorized, list):
+        raise ConfigError(
+            f"用户 {login_user} 的 ssh_authorized_keys 必须是列表"
+        )
+    if public_key not in authorized:
+        authorized.append(public_key)
+
+    body = yaml.safe_dump(
+        data, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+    return f"{CLOUD_CONFIG_HEADER}\n{body}", login_user
