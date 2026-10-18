@@ -6,3 +6,5 @@ images/
 
 __pycache__/
 .pytest_cache/
+
+keys/
