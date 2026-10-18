@@ -65,7 +65,11 @@ uv run kvmci templates
 uv run kvmci create rocky-llm
 # 4. Inspect
 uv run kvmci list
-# 5. Destroy
+# 5. SSH into the instance (key + real IP are resolved automatically)
+uv run kvmci shell rocky-llm
+# 6. Run a one-off command
+uv run kvmci exec rocky-llm -- uname -a
+# 7. Destroy (also removes the auto-generated key pair)
 uv run kvmci destroy rocky-llm
 ```
 
@@ -73,10 +77,12 @@ uv run kvmci destroy rocky-llm
 
 | Command | Description |
 | --- | --- |
-| `create <name> [--template T] [--yes] [--force]` | Create the instance; a same-named domain is destroyed first. `--template` overrides the instance's template reference, or allows creating an unregistered instance. `--yes` skips the `production` confirmation; `--force` forces removal of a `production` same-named instance (equivalent to `--yes` for that check). Neither works on `protected`. |
-| `destroy <name> [--force] [--yes]` | Graceful shutdown (waits up to `shutdown_timeout` seconds), delete snapshots, undefine with NVRAM and all storage. `--force` powers off on timeout; `--yes` skips the `production` confirmation. `protected` instances are always rejected. |
+| `create <name> [--template T] [--yes] [--force]` | Create the instance; a same-named domain is destroyed first. `--template` overrides the instance's template reference, or allows creating an unregistered instance. `--yes` skips the `production` confirmation; `--force` forces removal of a `production` same-named instance (equivalent to `--yes` for that check). Neither works on `protected`. Also generates `keys/<name>` + `keys/<name>.pub` and injects the public key into the rendered `user-data` at runtime. |
+| `destroy <name> [--force] [--yes]` | Graceful shutdown (waits up to `shutdown_timeout` seconds), delete snapshots, undefine with NVRAM and all storage, then delete the auto-generated key pair `keys/<name>` + `keys/<name>.pub`. `--force` powers off on timeout; `--yes` skips the `production` confirmation. `protected` instances are always rejected (and their keys are kept). |
 | `list` | Configured instances plus any unregistered libvirt domains, with live state. |
 | `templates` | List templates from `templates.conf`. |
+| `shell <name>` | Open an interactive SSH session. Uses the instance's private key and the **actual** IPv4 address discovered from libvirt (DHCP lease → qemu-guest-agent → ARP), never the address declared in `network-config`. |
+| `exec <name> -- <command>` | Run one command non-interactively over SSH. Everything after `--` is joined and passed to the remote shell; stdout/stderr are streamed and the remote exit status becomes the `kvmci` exit code. |
 
 ## Deletion Protection
 
@@ -164,19 +170,28 @@ can coexist — give them distinct hostnames/IPs in their own `network-config`
 
 1. Config is loaded and merged; cloud-init documents are rendered
    (instance inline > template inline > template directory).
-2. A temporary directory holds the rendered files and a `cidata.iso` built with
+2. An Ed25519 (falling back to RSA-3072) key pair is generated under
+   `keys/<name>`, and the public key is appended to the rendered `user-data`
+   for the first non-root user (adding a sudo user `cliff` when none exists);
+   the login user is recorded in the domain metadata. Existing user-defined
+   keys are never overwritten.
+3. A temporary directory holds the rendered files and a `cidata.iso` built with
    pycdlib (volume label `cidata`, RockRidge + Joliet), and is removed
    afterwards.
-3. The qcow2 image and seed ISO are uploaded to the storage pool over libvirt
+4. The qcow2 image and seed ISO are uploaded to the storage pool over libvirt
    streams; `capacity` is applied via the storage volume resize API.
-4. The domain XML is built directly (virtio disk/NIC, SATA CD-ROM, VNC/serial
+5. The domain XML is built directly (virtio disk/NIC, SATA CD-ROM, VNC/serial
    console, host-passthrough CPU) and the persistent domain is defined and
    started. UEFI explicitly uses the plain (non-Secure-Boot) OVMF pair
    resolved from QEMU firmware descriptors, with BIOS fallback when OVMF is
    unavailable.
-5. Destroying shuts the domain down gracefully, deletes snapshots, undefines
-   with NVRAM, and removes external-snapshot overlays, memory-state files and
-   backing-chain base images via structured XML parsing.
+6. `shell` / `exec` resolve the actual IPv4 address from libvirt
+   (`virsh domifaddr`-equivalent, lease → agent → ARP), connect with the
+   per-instance private key, and run via paramiko (no `ssh` subprocess).
+7. Destroying shuts the domain down gracefully, deletes snapshots, undefines
+   with NVRAM, removes external-snapshot overlays, memory-state files and
+   backing-chain base images via structured XML parsing, and deletes the
+   auto-generated key pair.
 
 ## Tests
 
@@ -257,7 +272,11 @@ uv run kvmci templates
 uv run kvmci create rocky-llm
 # 4. 查看状态
 uv run kvmci list
-# 5. 销毁
+# 5. SSH 登录实例（自动使用密钥与实际 IP）
+uv run kvmci shell rocky-llm
+# 6. 执行一次性命令
+uv run kvmci exec rocky-llm -- uname -a
+# 7. 销毁（同时删除自动生成的密钥对）
 uv run kvmci destroy rocky-llm
 ```
 
@@ -265,10 +284,12 @@ uv run kvmci destroy rocky-llm
 
 | 命令 | 说明 |
 | --- | --- |
-| `create <名称> [--template T] [--yes] [--force]` | 创建实例，同名域会先被销毁；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板；`--yes` 跳过 production 确认；`--force` 强制删除 production 同名旧实例后重建（对该检查等价于 `--yes`）；二者对 protected 均无效 |
-| `destroy <名称> [--force] [--yes]` | 优雅关机（等待 `shutdown_timeout` 秒）、删除快照、带 NVRAM undefine 并清理全部存储；`--force` 超时后强制断电；`--yes` 跳过 production 确认；protected 实例始终被拒绝 |
+| `create <名称> [--template T] [--yes] [--force]` | 创建实例，同名域会先被销毁；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板；`--yes` 跳过 production 确认；`--force` 强制删除 production 同名旧实例后重建（对该检查等价于 `--yes`）；二者对 protected 均无效。同时生成 `keys/<名称>` 与 `keys/<名称>.pub`，并在运行时把公钥注入渲染后的 `user-data` |
+| `destroy <名称> [--force] [--yes]` | 优雅关机（等待 `shutdown_timeout` 秒）、删除快照、带 NVRAM undefine 并清理全部存储，随后删除自动生成的密钥对 `keys/<名称>` 与 `keys/<名称>.pub`；`--force` 超时后强制断电；`--yes` 跳过 production 确认；protected 实例始终被拒绝（密钥一并保留） |
 | `list` | 列出已登记实例与未登记的 libvirt 域及实时状态 |
 | `templates` | 列出 `templates.conf` 中定义的模板 |
+| `shell <名称>` | 打开 SSH 交互式登录会话；使用实例私钥与 libvirt 实测 IPv4 地址（DHCP 租约 → qemu-guest-agent → ARP 依次回退），绝不信任 `network-config` 中声明的地址 |
+| `exec <名称> -- <命令>` | 非交互执行一条命令；`--` 之后的所有参数拼接后交给远端 shell，实时透传 stdout/stderr，远端退出码即 `kvmci` 退出码 |
 
 ## 删除保护
 
@@ -351,16 +372,23 @@ rocky-dev:              # 实例名（即 libvirt 域名），顶层键
 ## 工作原理
 
 1. 加载并合并配置，渲染 cloud-init 三份文档（实例内联 > 模板内联 > 模板目录）。
-2. 在临时目录中用 pycdlib 生成卷标 `cidata`（RockRidge + Joliet）的
+2. 在 `keys/<名称>` 下生成密钥对（首选 Ed25519，回退 RSA-3072），把公钥追加到
+   渲染后的 `user-data` 中第一个非 root 用户（若不存在则新增 sudo 用户 `cliff`），
+   并把登录用户记入域元数据；用户自定义的公钥绝不会被覆盖。
+3. 在临时目录中用 pycdlib 生成卷标 `cidata`（RockRidge + Joliet）的
    `cidata.iso`，流程结束后临时目录自动删除。
-3. qcow2 镜像与种子 ISO 通过 libvirt stream 上传到存储池；`capacity` 通过
+4. qcow2 镜像与种子 ISO 通过 libvirt stream 上传到存储池；`capacity` 通过
    存储卷扩容 API 生效。
-4. 直接构建 domain XML（virtio 磁盘/网卡、SATA 光驱、VNC/串口控制台、
+5. 直接构建 domain XML（virtio 磁盘/网卡、SATA 光驱、VNC/串口控制台、
    host-passthrough CPU），定义持久域并启动；UEFI 显式使用从 QEMU 固件
    描述符解析出的无安全启动普通 OVMF（CODE + VARS 模板），缺失 OVMF 时
    回退 BIOS。
-5. 销毁时优雅关机、删除快照、带 NVRAM undefine，并通过结构化 XML 解析清理
-   外部快照 overlay、内存状态文件及 backing chain 上的基础镜像。
+6. `shell` / `exec` 从 libvirt 实测 IPv4（等价 `virsh domifaddr`，按
+   租约 → guest-agent → ARP 回退），用实例私钥经 paramiko 连接
+   （不调用 `ssh` 子进程）。
+7. 销毁时优雅关机、删除快照、带 NVRAM undefine，并通过结构化 XML 解析清理
+   外部快照 overlay、内存状态文件及 backing chain 上的基础镜像，同时删除
+   自动生成的密钥对。
 
 ## 测试
 

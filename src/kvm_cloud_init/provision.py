@@ -11,10 +11,10 @@ from pathlib import Path
 
 import libvirt
 
-from . import cloudinit, qcow2, seediso
+from . import cloudinit, qcow2, seediso, ssh
 from .config import ConfigStore, ResolvedInstance
-from .errors import ImageNotFound, ProtectionDenied
-from .hv import client, domains, firmware, guest
+from .errors import ImageNotFound, ProtectionDenied, ProvisionError, SshError
+from .hv import client, domains, firmware, guest, network
 from .hv import storage as hv_storage
 from .hv.client import DOMAIN_STATE_NAMES, pool_target_path
 
@@ -115,6 +115,14 @@ def create_instance(
 
     docs = cloudinit.render_docs(store, resolved)
 
+    # 运行时注入：生成/复用实例密钥对，把公钥追加进合并后 user-data，
+    # 并确定 SSH 登录用户（不写回模板）。
+    ssh.ensure_keypair(name)
+    public_key = ssh.read_public_key(name)
+    docs["user-data"], ssh_user = cloudinit.inject_ssh_access(
+        docs["user-data"], public_key
+    )
+
     pool = client.get_pool(conn, resolved.storage_pool, refresh=True)
     pool_dir = pool_target_path(pool)
 
@@ -174,6 +182,7 @@ def create_instance(
         video=resolved.video,
         loader=uefi_pair[0] if uefi_pair is not None else None,
         nvram_template=uefi_pair[1] if uefi_pair is not None else None,
+        ssh_user=ssh_user,
     )
     guest.define_and_start(conn, xml_desc)
     print(f"实例 {name} 已创建并启动（模板 {resolved.template.name}）。")
@@ -205,7 +214,52 @@ def destroy_instance(
         print(f"实例 {name} 不存在，无需销毁。")
     else:
         print(f"实例 {name} 已销毁。")
+
+    _cleanup_keypair(name)
     return existed
+
+
+def _cleanup_keypair(name: str) -> None:
+    """销毁后清理程序生成的密钥；删除失败不阻断流程，仅输出警告。"""
+    try:
+        ssh.delete_keypair(name)
+    except OSError as exc:
+        print(f"警告：删除实例 {name} 的 SSH 密钥失败：{exc}，请手工清理。")
+
+
+def _ssh_target(conn: libvirt.virConnect, name: str) -> tuple[str, str, Path]:
+    """解析 shell / exec 所需的目标：实测 IP、登录用户、私钥路径。"""
+    dom = domains.lookup_domain(conn, name)
+    if dom is None:
+        raise ProvisionError(f"实例 {name} 不存在")
+    if dom.state(0)[0] != libvirt.VIR_DOMAIN_RUNNING:
+        raise ProvisionError(f"实例 {name} 未处于运行状态，请先启动后再连接")
+    user = guest.domain_ssh_user(dom)
+    if not user:
+        raise SshError(
+            f"实例 {name} 未记录 SSH 登录用户；请重新执行 kvmci create <实例名>"
+        )
+    key_path = ssh.private_key_path(name)
+    if not key_path.is_file():
+        raise SshError(
+            f"实例 {name} 的私钥不存在：{key_path}；请先执行 kvmci create <实例名>"
+        )
+    host = network.find_ipv4(conn, name)
+    return host, user, key_path
+
+
+def shell_instance(store: ConfigStore, conn: libvirt.virConnect, name: str) -> int:
+    """打开实例的 SSH 交互式登录会话，返回远端退出码。"""
+    host, user, key_path = _ssh_target(conn, name)
+    return ssh.interactive_shell(name, host, user, key_path)
+
+
+def exec_instance(
+    store: ConfigStore, conn: libvirt.virConnect, name: str, command: list[str]
+) -> int:
+    """在实例中执行一条命令（-- 之后的所有 token 拼接），返回远端退出码。"""
+    host, user, key_path = _ssh_target(conn, name)
+    return ssh.run_command(name, host, user, key_path, " ".join(command))
 
 
 def list_instances(

@@ -5,7 +5,12 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
-from kvm_cloud_init.hv.guest import LIBOSINFO_NS, METADATA_NS, build_domain_xml
+from kvm_cloud_init.hv.guest import (
+    LIBOSINFO_NS,
+    METADATA_NS,
+    build_domain_xml,
+    domain_ssh_user,
+)
 
 # guest 测试只关心 XML 生成，osinfo 解析逻辑由 test_osinfo 覆盖；
 # 这里固定 resolve_os_id 的返回，避免触发本机扫描与网络请求。
@@ -217,3 +222,31 @@ def test_metadata_libosinfo_unknown_omitted() -> None:
     # 无法识别的 os-variant 不生成 libosinfo 节点
     root = _build_with(os_variant="totally-unknown-99")
     assert root.find(f".//{{{LIBOSINFO_NS}}}libosinfo") is None
+
+
+def test_metadata_ssh_user_written() -> None:
+    config = _build_with(ssh_user="cliff").find(f".//{{{METADATA_NS}}}config")
+    assert config.findtext(f"{{{METADATA_NS}}}ssh-user") == "cliff"
+
+
+def test_metadata_ssh_user_omitted_by_default() -> None:
+    config = ET.fromstring(_build()).find(f".//{{{METADATA_NS}}}config")
+    assert config.find(f"{{{METADATA_NS}}}ssh-user") is None
+
+
+class _FakeDom:
+    def __init__(self, xml: str) -> None:
+        self._xml = xml
+
+    def XMLDesc(self, flags: int) -> str:  # noqa: ARG002
+        return self._xml
+
+
+def test_domain_ssh_user_reader() -> None:
+    with_ssh = _build_xml(
+        name="vm1", disk_path="/d.qcow2", iso_path="/c.iso", memory_mib=1,
+        vcpus=1, network="default", firmware="bios", os_variant="rocky10",
+        template_name="t", ssh_user="cliff",
+    )
+    assert domain_ssh_user(_FakeDom(with_ssh)) == "cliff"
+    assert domain_ssh_user(_FakeDom(_build())) is None

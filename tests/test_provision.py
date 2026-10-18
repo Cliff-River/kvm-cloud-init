@@ -10,11 +10,12 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import libvirt
 import pytest
 
 from kvm_cloud_init import provision
 from kvm_cloud_init.config import ConfigStore
-from kvm_cloud_init.errors import ProtectionDenied
+from kvm_cloud_init.errors import ProtectionDenied, ProvisionError, SshError
 
 
 class _FakeStdin:
@@ -260,3 +261,125 @@ def test_create_protected_without_existing_domain_allowed(
     monkeypatch.setattr(provision.cloudinit, "render_docs", fail_later)
     with pytest.raises(_Proceeded):
         provision.create_instance(level_store, object(), "crit")
+
+
+# ---- destroy 同步清理密钥（R8） ----
+
+
+def _record_key_deletion(monkeypatch) -> list[str]:
+    deleted: list[str] = []
+
+    def fake_delete(name: str) -> list:
+        deleted.append(name)
+        return []
+
+    monkeypatch.setattr(provision.ssh, "delete_keypair", fake_delete)
+    return deleted
+
+
+def test_destroy_allowed_removes_keypair(level_store, monkeypatch) -> None:
+    _record_destroy(monkeypatch)
+    deleted = _record_key_deletion(monkeypatch)
+    assert provision.destroy_instance(level_store, object(), "plain") is True
+    assert deleted == ["plain"]
+
+
+def test_destroy_protected_keeps_keypair(level_store, monkeypatch) -> None:
+    deleted = _record_key_deletion(monkeypatch)
+    with pytest.raises(ProtectionDenied, match="protected"):
+        provision.destroy_instance(level_store, object(), "crit")
+    assert deleted == []
+
+
+def test_destroy_key_deletion_failure_does_not_block(level_store, monkeypatch, capsys) -> None:
+    _record_destroy(monkeypatch)
+
+    def explode(name: str) -> list:
+        raise OSError("权限不足")
+
+    monkeypatch.setattr(provision.ssh, "delete_keypair", explode)
+    assert provision.destroy_instance(level_store, object(), "plain") is True
+    assert "警告" in capsys.readouterr().out
+
+
+def test_create_rebuild_does_not_delete_keypair(level_store, monkeypatch) -> None:
+    _existing_domain(monkeypatch)
+    _record_destroy(monkeypatch)
+    deleted = _record_key_deletion(monkeypatch)
+    _proceed_after_destroy(monkeypatch, [])
+    with pytest.raises(_Proceeded):
+        provision.create_instance(level_store, object(), "plain", yes=True)
+    assert deleted == []
+
+
+# ---- shell / exec 的目标解析 ----
+
+
+class _RunningDom:
+    def state(self, flags: int) -> list[int]:
+        return [libvirt.VIR_DOMAIN_RUNNING]
+
+
+def _prepare_ssh_target(monkeypatch, tmp_path: Path) -> Path:
+    monkeypatch.setattr(
+        provision.domains, "lookup_domain", lambda conn, name: _RunningDom()
+    )
+    monkeypatch.setattr(provision.guest, "domain_ssh_user", lambda dom: "cliff")
+    monkeypatch.setattr(
+        provision.network, "find_ipv4", lambda conn, name: "10.0.0.5"
+    )
+    key = tmp_path / "plain"
+    key.write_text("private")
+    monkeypatch.setattr(provision.ssh, "private_key_path", lambda name: key)
+    return key
+
+
+def test_shell_instance_passes_target(level_store, monkeypatch, tmp_path) -> None:
+    key = _prepare_ssh_target(monkeypatch, tmp_path)
+    captured = {}
+
+    def fake_shell(instance, host, user, key_path) -> int:
+        captured.update(instance=instance, host=host, user=user, key=key_path)
+        return 0
+
+    monkeypatch.setattr(provision.ssh, "interactive_shell", fake_shell)
+    assert provision.shell_instance(level_store, object(), "plain") == 0
+    assert captured == {"instance": "plain", "host": "10.0.0.5", "user": "cliff", "key": key}
+
+
+def test_exec_instance_joins_command(level_store, monkeypatch, tmp_path) -> None:
+    _prepare_ssh_target(monkeypatch, tmp_path)
+    captured = {}
+
+    def fake_run(instance, host, user, key_path, command) -> int:
+        captured.update(host=host, user=user, command=command)
+        return 7
+
+    monkeypatch.setattr(provision.ssh, "run_command", fake_run)
+    rc = provision.exec_instance(level_store, object(), "plain", ["ls", "-l", "/"])
+    assert rc == 7
+    assert captured == {"host": "10.0.0.5", "user": "cliff", "command": "ls -l /"}
+
+
+def test_shell_instance_requires_running_domain(level_store, monkeypatch) -> None:
+    monkeypatch.setattr(
+        provision.domains, "lookup_domain", lambda conn, name: None
+    )
+    with pytest.raises(ProvisionError, match="不存在"):
+        provision.shell_instance(level_store, object(), "ghost")
+
+
+def test_shell_instance_requires_recorded_user(level_store, monkeypatch, tmp_path) -> None:
+    _prepare_ssh_target(monkeypatch, tmp_path)
+    monkeypatch.setattr(provision.guest, "domain_ssh_user", lambda dom: None)
+    with pytest.raises(SshError, match="登录用户"):
+        provision.shell_instance(level_store, object(), "plain")
+
+
+def test_shell_instance_requires_private_key(level_store, monkeypatch, tmp_path) -> None:
+    _prepare_ssh_target(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        provision.ssh, "private_key_path", lambda name: tmp_path / "missing"
+    )
+    with pytest.raises(SshError, match="私钥不存在"):
+        provision.shell_instance(level_store, object(), "plain")

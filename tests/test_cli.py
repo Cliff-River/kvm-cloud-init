@@ -104,3 +104,35 @@ def test_bad_args() -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main(["nonsense"])
     assert exc.value.code == 2
+
+
+def test_shell_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "shell_instance",
+        lambda store, conn, name: calls.update(name=name) or 0,
+    )
+    assert cli.main(["shell", "rocky-lvm"]) == 0
+    assert calls == {"name": "rocky-lvm"}
+
+
+def test_exec_dispatch_joins_command_after_separator(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "exec_instance",
+        lambda store, conn, name, command: calls.update(
+            name=name, command=command
+        ) or 7,
+    )
+    assert cli.main(["exec", "rocky-lvm", "--", "ls", "-l", "/"]) == 7
+    assert calls == {"name": "rocky-lvm", "command": ["ls", "-l", "/"]}
+
+
+def test_exec_without_command_is_usage_error(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    assert cli.main(["exec", "rocky-lvm"]) == 2
+    assert "命令" in capsys.readouterr().err

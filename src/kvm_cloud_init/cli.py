@@ -52,6 +52,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list", help="列出已登记实例及 libvirt 中的域状态")
     sub.add_parser("templates", help="列出 templates.conf 中定义的模板")
+
+    shell = sub.add_parser("shell", help="以 SSH 打开实例的交互式登录会话")
+    shell.add_argument("name", help="实例名（即 libvirt domain 名）")
+
+    exec_cmd = sub.add_parser("exec", help="在实例中执行一条命令")
+    exec_cmd.add_argument("name", help="实例名（即 libvirt domain 名）")
+    exec_cmd.add_argument(
+        "remote_command",
+        nargs=argparse.REMAINDER,
+        metavar="command",
+        help="远端命令；以 -- 分隔，例如：kvmci exec vm1 -- ls -l /",
+    )
     return parser
 
 
@@ -103,6 +115,19 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "list":
             rows = provision.list_instances(store, conn)
             _print_table(("实例名", "模板", "状态"), rows)
+        elif args.command == "shell":
+            return provision.shell_instance(store, conn, args.name)
+        elif args.command == "exec":
+            command = list(args.remote_command)
+            if command and command[0] == "--":
+                command = command[1:]
+            if not command:
+                print(
+                    "错误：exec 需要以 -- 提供远端命令，例如 kvmci exec vm1 -- ls -l /",
+                    file=sys.stderr,
+                )
+                return 2
+            return provision.exec_instance(store, conn, args.name, command)
         return 0
 
     except KciError as exc:
