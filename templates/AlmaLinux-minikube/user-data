@@ -48,7 +48,17 @@ runcmd:
   - dnf install -y kernel-modules-extra-$(uname -r)
   # 安装 Docker
   - [  dnf, install, -y, dnf-plugins-core  ]
-  - [ sudo, dnf, config-manager, -y, --add-repo, https://download.docker.com/linux/rhel/docker-ce.repo ]
+  # 添加 Docker CE 仓库（网络失败自动重试：最多 100 次，间隔 5 秒）
+  - |
+    n=0
+    until dnf config-manager -y --add-repo https://download.docker.com/linux/rhel/docker-ce.repo || [ -s /etc/yum.repos.d/docker-ce.repo ]; do
+      n=$((n+1))
+      if [ "$n" -ge 100 ]; then
+        echo "添加 docker-ce.repo 失败，已重试 $n 次" >&2
+        exit 1
+      fi
+      sleep 5
+    done
   - [ sudo, dnf, install, -y, docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin ]
   - [ sudo, systemctl, enable, --now, docker ]
   - [ /usr/sbin/usermod, -aG, docker, cliff ]
