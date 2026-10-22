@@ -59,17 +59,6 @@ def _query(dom: libvirt.virDomain) -> str | None:
     return None
 
 
-def probe_ipv4(conn: libvirt.virConnect, name: str) -> str | None:
-    """一次性探测 IPv4；实例不存在、未运行或地址未就绪时返回 None。
-
-    供需要自行控制轮询节奏的调用方（例如等待 cloud-init）使用。
-    """
-    dom = lookup_domain(conn, name)
-    if dom is None or dom.state(0)[0] != libvirt.VIR_DOMAIN_RUNNING:
-        return None
-    return _query(dom)
-
-
 def find_ipv4(
     conn: libvirt.virConnect,
     name: str,

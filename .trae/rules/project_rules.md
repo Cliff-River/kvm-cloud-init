@@ -53,7 +53,7 @@ uv sync                  # 安装依赖
 uv run pytest            # 单元测试（无需 root/KVM）
 uv run kvmci templates
 uv run kvmci list
-uv run kvmci create <实例名> [--template 模板] [--yes] [--force] [--no-wait]
+uv run kvmci create <实例名> [--template 模板] [--yes] [--force]
 uv run kvmci shell <实例名>
 uv run kvmci exec <实例名> -- <命令>
 uv run kvmci destroy <实例名> [--force] [--yes]
