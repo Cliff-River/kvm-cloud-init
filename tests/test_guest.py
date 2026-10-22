@@ -144,17 +144,17 @@ def test_devices() -> None:
 
 
 def _build_with(**kwargs) -> ET.Element:
-    defaults = dict(
-        name="vm1",
-        disk_path="/pool/vm1.qcow2",
-        iso_path="/pool/vm1-cidata.iso",
-        memory_mib=4096,
-        vcpus=4,
-        network="default",
-        firmware="efi",
-        os_variant="rocky10",
-        template_name="Rocky-LVM",
-    )
+    defaults = {
+        "name": "vm1",
+        "disk_path": "/pool/vm1.qcow2",
+        "iso_path": "/pool/vm1-cidata.iso",
+        "memory_mib": 4096,
+        "vcpus": 4,
+        "network": "default",
+        "firmware": "efi",
+        "os_variant": "rocky10",
+        "template_name": "Rocky-LVM",
+    }
     defaults.update(kwargs)
     return ET.fromstring(_build_xml(**defaults))
 
@@ -238,7 +238,7 @@ class _FakeDom:
     def __init__(self, xml: str) -> None:
         self._xml = xml
 
-    def XMLDesc(self, flags: int) -> str:  # noqa: ARG002
+    def XMLDesc(self, _flags: int) -> str:
         return self._xml
 
 

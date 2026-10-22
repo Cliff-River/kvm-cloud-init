@@ -173,10 +173,8 @@ def run_command(instance: str, host: str, user: str, key_path: Path, command: st
         _stdin, stdout, _stderr = client.exec_command(command)
         chan = stdout.channel
         chan.setblocking(0)
-        try:
-            _drain(chan)
-        finally:
-            return chan.recv_exit_status()
+        _drain(chan)
+        return chan.recv_exit_status()
     finally:
         client.close()
 

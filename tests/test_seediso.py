@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pycdlib
 
-from kvm_cloud_init.seediso import temporary_seed, build_seed_iso
+from kvm_cloud_init.seediso import build_seed_iso, temporary_seed
 
 DOCS = {
     "meta-data": "instance-id: t\nlocal-hostname: t\n",
