@@ -36,6 +36,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="同名旧实例为 production 时强制删除后重建（等价于 --yes）",
     )
+    create.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="创建后不等待 cloud-init 完成（默认等待，TTY 下可按任意键跳过）",
+    )
 
     destroy = sub.add_parser("destroy", help="销毁实例")
     destroy.add_argument("name", help="实例名")
@@ -107,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.template,
                 yes=args.yes,
                 force=args.force,
+                wait=not args.no_wait,
             )
         elif args.command == "destroy":
             provision.destroy_instance(

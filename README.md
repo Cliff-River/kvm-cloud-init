@@ -61,7 +61,7 @@ uv sync
 # 1. Review/edit the config files and templates/<name>/{meta-data,network-config,user-data}
 # 2. List available templates
 uv run kvmci templates
-# 3. Create an instance defined in instances.conf (idempotent)
+# 3. Create an instance defined in instances.conf (idempotent; waits for cloud-init)
 uv run kvmci create rocky-llm
 # 4. Inspect
 uv run kvmci list
@@ -77,7 +77,7 @@ uv run kvmci destroy rocky-llm
 
 | Command | Description |
 | --- | --- |
-| `create <name> [--template T] [--yes] [--force]` | Create the instance; a same-named domain is destroyed first. `--template` overrides the instance's template reference, or allows creating an unregistered instance. `--yes` skips the `production` confirmation; `--force` forces removal of a `production` same-named instance (equivalent to `--yes` for that check). Neither works on `protected`. Also generates `keys/<name>` + `keys/<name>.pub` and injects the public key into the rendered `user-data` at runtime. |
+| `create <name> [--template T] [--yes] [--force] [--no-wait]` | Create the instance; a same-named domain is destroyed first. `--template` overrides the instance's template reference, or allows creating an unregistered instance. `--yes` skips the `production` confirmation; `--force` forces removal of a `production` same-named instance (equivalent to `--yes` for that check). Neither works on `protected`. Also generates `keys/<name>` + `keys/<name>.pub` and injects the public key into the rendered `user-data` at runtime. After boot it waits for cloud-init to finish (polling `cloud-init status` over SSH); on a TTY, press any key to stop waiting while the VM keeps running. `--no-wait` skips the wait entirely. |
 | `destroy <name> [--force] [--yes]` | Graceful shutdown (waits up to `shutdown_timeout` seconds), delete snapshots, undefine with NVRAM and all storage, then delete the auto-generated key pair `keys/<name>` + `keys/<name>.pub`. `--force` powers off on timeout; `--yes` skips the `production` confirmation. `protected` instances are always rejected (and their keys are kept). |
 | `list` | Configured instances plus any unregistered libvirt domains, with live state. |
 | `templates` | List templates from `templates.conf`. |
@@ -268,7 +268,7 @@ uv sync
 # 1. 检查/编辑配置文件与 templates/<名称>/ 下的 cloud-init 三件套
 # 2. 查看可用模板
 uv run kvmci templates
-# 3. 创建 instances.conf 中定义的实例（幂等，可重复执行）
+# 3. 创建 instances.conf 中定义的实例（幂等，可重复执行；默认等待 cloud-init 完成）
 uv run kvmci create rocky-llm
 # 4. 查看状态
 uv run kvmci list
@@ -284,7 +284,7 @@ uv run kvmci destroy rocky-llm
 
 | 命令 | 说明 |
 | --- | --- |
-| `create <名称> [--template T] [--yes] [--force]` | 创建实例，同名域会先被销毁；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板；`--yes` 跳过 production 确认；`--force` 强制删除 production 同名旧实例后重建（对该检查等价于 `--yes`）；二者对 protected 均无效。同时生成 `keys/<名称>` 与 `keys/<名称>.pub`，并在运行时把公钥注入渲染后的 `user-data` |
+| `create <名称> [--template T] [--yes] [--force] [--no-wait]` | 创建实例，同名域会先被销毁；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板；`--yes` 跳过 production 确认；`--force` 强制删除 production 同名旧实例后重建（对该检查等价于 `--yes`）；二者对 protected 均无效。同时生成 `keys/<名称>` 与 `keys/<名称>.pub`，并在运行时把公钥注入渲染后的 `user-data`。启动后默认等待 cloud-init 完成（经 SSH 轮询 `cloud-init status`），TTY 下按任意键可停止等待、实例继续运行；`--no-wait` 完全跳过等待 |
 | `destroy <名称> [--force] [--yes]` | 优雅关机（等待 `shutdown_timeout` 秒）、删除快照、带 NVRAM undefine 并清理全部存储，随后删除自动生成的密钥对 `keys/<名称>` 与 `keys/<名称>.pub`；`--force` 超时后强制断电；`--yes` 跳过 production 确认；protected 实例始终被拒绝（密钥一并保留） |
 | `list` | 列出已登记实例与未登记的 libvirt 域及实时状态 |
 | `templates` | 列出 `templates.conf` 中定义的模板 |

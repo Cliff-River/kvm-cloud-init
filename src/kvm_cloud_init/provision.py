@@ -6,7 +6,12 @@
 
 from __future__ import annotations
 
+import os
+import select
 import sys
+import termios
+import time
+import tty
 from pathlib import Path
 
 import libvirt
@@ -20,6 +25,10 @@ from .hv.client import DOMAIN_STATE_NAMES, pool_target_path
 
 DISK_SUFFIX = ".qcow2"
 SEED_SUFFIX = "-cidata.iso"
+#: 等待 cloud-init 时的轮询间隔（秒）
+WAIT_INTERVAL = 5.0
+#: `cloud-init status` 报告中可视为“已结束”的状态
+_CLOUD_INIT_FINISHED = ("done", "error", "degraded", "disabled")
 
 
 def _disk_name(instance_name: str) -> str:
@@ -77,6 +86,94 @@ def _ensure_destroy_allowed(
     )
 
 
+def _key_pressed(timeout: float) -> bool:
+    """最多等待 ``timeout`` 秒；期间按下任意键返回 True。
+
+    仅 TTY 下监听按键；非交互环境仅作普通等待，避免误读管道数据。
+    """
+    try:
+        interactive = sys.stdin.isatty()
+    except (AttributeError, OSError):
+        interactive = False
+    if not interactive:
+        time.sleep(timeout)
+        return False
+
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        readable, _, _ = select.select([fd], [], [], timeout)
+        if not readable:
+            return False
+        os.read(fd, 1)
+        return True
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+
+
+def _cloud_init_status(output: str) -> str | None:
+    """从 ``cloud-init status`` 输出中取 ``status:`` 的值。"""
+    for line in output.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "status":
+            return value.strip()
+    return None
+
+
+def wait_for_cloud_init(
+    conn: libvirt.virConnect,
+    name: str,
+    *,
+    ssh_user: str,
+    key_path: Path,
+    interval: float = WAIT_INTERVAL,
+) -> bool:
+    """等待实例的 cloud-init 执行结束，返回是否等到结束。
+
+    启动后轮询实测 IP 与 ``cloud-init status``：done / error / degraded /
+    disabled 均视为结束（非 done 会提示登录检查）。TTY 下按任意键可提前
+    结束等待，实例保持运行；非 TTY 环境只能等待 cloud-init 自行结束。
+    """
+    print(f"等待实例 {name} 的 cloud-init 完成（按任意键跳过等待）...")
+    while True:
+        if _key_pressed(0):
+            print("已跳过等待，实例仍在后台运行。")
+            return False
+
+        dom = domains.lookup_domain(conn, name)
+        if dom is None or dom.state(0)[0] != libvirt.VIR_DOMAIN_RUNNING:
+            raise ProvisionError(
+                f"实例 {name} 未处于运行状态，已停止等待 cloud-init"
+            )
+
+        ip = network.probe_ipv4(conn, name)
+        if ip is not None:
+            try:
+                rc, output = ssh.run_capture(
+                    name, ip, ssh_user, key_path, "cloud-init status"
+                )
+            except SshError:
+                rc, output = None, ""
+            if rc == 127:
+                print("实例内未找到 cloud-init 命令，跳过等待。")
+                return True
+            state = _cloud_init_status(output) if rc is not None else None
+            if state in _CLOUD_INIT_FINISHED:
+                if state == "done":
+                    print("cloud-init 已完成。")
+                else:
+                    print(
+                        f"cloud-init 已结束，但状态为 {state}，"
+                        f"请登录检查：uv run kvmci shell {name}"
+                    )
+                return True
+
+        if _key_pressed(interval):
+            print("已跳过等待，实例仍在后台运行。")
+            return False
+
+
 def create_instance(
     store: ConfigStore,
     conn: libvirt.virConnect,
@@ -84,11 +181,13 @@ def create_instance(
     template_name: str | None = None,
     yes: bool = False,
     force: bool = False,
+    wait: bool = True,
 ) -> ResolvedInstance:
     """幂等创建实例：同名域存在时先销毁再创建。
 
     ``yes`` / ``force`` 均可跳过 production 级别的交互确认；
-    protected 级别在任何情况下都拒绝隐式销毁。
+    protected 级别在任何情况下都拒绝隐式销毁。``wait`` 为 True 时在启动后
+    等待 cloud-init 完成（TTY 下可按任意键提前结束等待）。
     """
     resolved = store.resolve(name, template_name)
     if not resolved.image_path.is_file():
@@ -186,6 +285,13 @@ def create_instance(
     )
     guest.define_and_start(conn, xml_desc)
     print(f"实例 {name} 已创建并启动（模板 {resolved.template.name}）。")
+    if wait:
+        wait_for_cloud_init(
+            conn,
+            name,
+            ssh_user=ssh_user,
+            key_path=ssh.private_key_path(name),
+        )
     return resolved
 
 
