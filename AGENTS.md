@@ -50,7 +50,9 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 - 创建：生成/复用 `keys/<名称>` 密钥对 → 渲染文档并把公钥运行时注入合并后
   `user-data`（追加到首个非 root 用户，无则新增 `cliff`）→ 临时目录生成
   cidata.iso（pycdlib）→ stream 上传镜像与 ISO 到存储池（按实例命名卷）→
-  可选卷扩容 → 构建 domain XML（含 `ssh-user` 元数据）→ define + start。
+  可选卷扩容 → 构建 domain XML（含 `ssh-user` 元数据）→ define + start →
+  默认等待 cloud-init 完成（实测 IPv4 + SSH 轮询 `cloud-init status`；
+  TTY 下按任意键提前结束等待，`--no-wait` 完全跳过）。
 - 销毁：优雅关机轮询 → 收集域/快照 XML 中外部文件并追 backing chain →
   删快照 → undefine（NVRAM/checkpoints/TPM 标志位）→ 清理残留卷与文件 →
   删除 `keys/<名称>` 与 `<名称>.pub`（保护级别未通过则不删）。

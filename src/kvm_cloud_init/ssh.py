@@ -23,6 +23,8 @@ from .errors import SshError
 
 #: 连接超时（秒）
 CONNECT_TIMEOUT = 10
+#: 捕获式命令执行的超时（秒）
+CAPTURE_TIMEOUT = 15
 #: 读写缓冲区
 _BUFSIZE = 65536
 
@@ -172,6 +174,30 @@ def _pump(chan: paramiko.Channel, stdin_fd: int) -> int:
             else:
                 chan.shutdown_write()
     return chan.recv_exit_status()
+
+
+def run_capture(
+    instance: str,
+    host: str,
+    user: str,
+    key_path: Path,
+    command: str,
+    *,
+    timeout: float = CAPTURE_TIMEOUT,
+) -> tuple[int, str]:
+    """在远端执行一条命令并捕获 stdout，返回 (退出码, stdout)。
+
+    不打印任何输出，供等待 cloud-init 等需要读取结果的轮询使用。
+    """
+    client = _connect(instance, host, user, key_path)
+    try:
+        _stdin, stdout, _stderr = client.exec_command(command, timeout=timeout)
+        output = stdout.read().decode("utf-8", errors="replace")
+        return stdout.channel.recv_exit_status(), output
+    except (paramiko.SSHException, OSError) as exc:
+        raise SshError(f"在实例 {instance} 执行命令失败：{exc}") from exc
+    finally:
+        client.close()
 
 
 def run_command(instance: str, host: str, user: str, key_path: Path, command: str) -> int:
