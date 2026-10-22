@@ -21,56 +21,23 @@ def test_templates_command(capsys) -> None:
 def test_create_dispatch(monkeypatch) -> None:
     calls = {}
 
-    def fake_create(
-        store, conn, name, template_name=None, yes=False, force=False, wait=True
-    ):
-        calls.update(
-            name=name, template=template_name, yes=yes, force=force, wait=wait
-        )
+    def fake_create(store, conn, name, template_name=None, yes=False, force=False):
+        calls.update(name=name, template=template_name, yes=yes, force=force)
 
     monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
     monkeypatch.setattr(cli.provision, "create_instance", fake_create)
 
     assert cli.main(["create", "rocky-lvm"]) == 0
-    assert calls == {
-        "name": "rocky-lvm",
-        "template": None,
-        "yes": False,
-        "force": False,
-        "wait": True,
-    }
+    assert calls == {"name": "rocky-lvm", "template": None, "yes": False, "force": False}
 
     assert cli.main(["create", "adhoc", "--template", "Debian"]) == 0
-    assert calls == {
-        "name": "adhoc",
-        "template": "Debian",
-        "yes": False,
-        "force": False,
-        "wait": True,
-    }
-
-
-def test_create_no_wait_dispatch(monkeypatch) -> None:
-    calls = {}
-
-    def fake_create(
-        store, conn, name, template_name=None, yes=False, force=False, wait=True
-    ):
-        calls.update(wait=wait)
-
-    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
-    monkeypatch.setattr(cli.provision, "create_instance", fake_create)
-
-    assert cli.main(["create", "rocky-lvm", "--no-wait"]) == 0
-    assert calls == {"wait": False}
+    assert calls == {"name": "adhoc", "template": "Debian", "yes": False, "force": False}
 
 
 def test_create_yes_and_force_dispatch(monkeypatch) -> None:
     calls = {}
 
-    def fake_create(
-        store, conn, name, template_name=None, yes=False, force=False, wait=True
-    ):
+    def fake_create(store, conn, name, template_name=None, yes=False, force=False):
         calls.update(yes=yes, force=force)
 
     monkeypatch.setattr(cli, "connect", lambda: _FakeConn())

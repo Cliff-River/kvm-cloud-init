@@ -101,12 +101,6 @@ class _FakeStream:
     def __init__(self, chan: _FakeChannel) -> None:
         self.channel = chan
 
-    def read(self) -> bytes:
-        out = b""
-        while self.channel.recv_ready():
-            out += self.channel.recv(65536)
-        return out
-
 
 class _FakeClient:
     def __init__(self, chan: _FakeChannel) -> None:
@@ -114,7 +108,7 @@ class _FakeClient:
         self.command: str | None = None
         self.closed = False
 
-    def exec_command(self, command: str, timeout: float | None = None):
+    def exec_command(self, command: str):
         self.command = command
         return None, _FakeStream(self.chan), _FakeStream(self.chan)
 
@@ -138,34 +132,6 @@ def test_run_command_passes_command_and_returns_remote_status(
     assert client.command == "ls -l /"
     assert client.closed is True
     assert "hello" in capfd.readouterr().out
-
-
-def test_run_capture_returns_status_and_output(keys_root: Path, monkeypatch) -> None:
-    chan = _FakeChannel(out=b"status: done\n", status=0)
-    client = _FakeClient(chan)
-    monkeypatch.setattr(ssh, "_connect", lambda *a, **k: client)
-
-    rc, out = ssh.run_capture(
-        "vm1", "10.0.0.5", "cliff", Path("/k"), "cloud-init status"
-    )
-
-    assert (rc, out) == (0, "status: done\n")
-    assert client.command == "cloud-init status"
-    assert client.closed is True
-
-
-def test_run_capture_wraps_failures(keys_root: Path, monkeypatch) -> None:
-    client = _FakeClient(_FakeChannel())
-    monkeypatch.setattr(ssh, "_connect", lambda *a, **k: client)
-
-    def explode() -> bytes:
-        raise OSError("通道已关闭")
-
-    monkeypatch.setattr(_FakeStream, "read", lambda self: explode())
-
-    with pytest.raises(SshError, match="执行命令失败"):
-        ssh.run_capture("vm1", "10.0.0.5", "cliff", Path("/k"), "cloud-init status")
-    assert client.closed is True
 
 
 def test_interactive_shell_returns_remote_exit_status(
