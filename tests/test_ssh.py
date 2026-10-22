@@ -73,7 +73,7 @@ class _FakeChannel:
         self._err = err
         self._status = status
 
-    def setblocking(self, flag: int) -> None:  # noqa: ARG002
+    def setblocking(self, _flag: int) -> None:
         pass
 
     def recv_ready(self) -> bool:

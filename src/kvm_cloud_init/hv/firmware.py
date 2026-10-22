@@ -54,7 +54,8 @@ def _uefi_from_filesystem() -> bool:
     for pattern in _FIRMWARE_DESC_GLOBS:
         for path in glob.glob(pattern):
             try:
-                text = open(path, encoding="utf-8", errors="ignore").read()
+                with open(path, encoding="utf-8", errors="ignore") as fh:
+                    text = fh.read()
             except OSError:
                 continue
             if "uefi" in text.lower():
