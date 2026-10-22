@@ -128,7 +128,15 @@ def interactive_shell(instance: str, host: str, user: str, key_path: Path) -> in
     """打开交互式登录会话，返回远端退出码。"""
     client = _connect(instance, host, user, key_path)
     try:
-        chan = client.invoke_shell()
+        # 透传本地 TERM 与窗口尺寸：paramiko 默认 term='vt100'，
+        # 会导致远端程序误判终端不支持 256 色，输出全部退化为默认（灰）色。
+        term = os.environ.get("TERM", "xterm-256color")
+        try:
+            size = os.get_terminal_size()
+            width, height = size.columns, size.lines
+        except OSError:
+            width, height = 80, 24
+        chan = client.invoke_shell(term=term, width=width, height=height)
         chan.setblocking(0)
         stdin_fd = sys.stdin.fileno()
         old_attrs = None
