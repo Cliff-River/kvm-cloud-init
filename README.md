@@ -108,6 +108,13 @@ running). `Ctrl+C` stops waiting, prints
 `Stopped waiting for cloud-init. Instance <name> keeps running.`, and exits
 `0`.
 
+While waiting it prints `Waiting for cloud-init to complete...`, then
+`Connected to <name> at <ip>.` once SSH is reachable. On a TTY it shows a
+spinner (`⠋⠙⠹…`) refreshed in place every 0.1s, including an
+`SSH: waiting for connection` phase before the IP is available. When output is
+redirected it appends a status line every 15 seconds instead. `--verbose` also
+streams the last lines of `cloud-init-output.log`.
+
 Exit codes are `0` success, `1` business failure, `2` usage error.
 
 ## Deletion Protection
@@ -338,6 +345,13 @@ stderr 打印 `Cloud-init failed:`、`--long` 摘要与
 `/var/log/cloud-init-output.log` 末尾 20 行，退出 1（实例保持运行）。
 `Ctrl+C` 会停止等待并打印
 `Stopped waiting for cloud-init. Instance <名称> keeps running.`，退出 0。
+
+等待期间会先打印 `Waiting for cloud-init to complete...`，SSH 可达后打印
+`Connected to <名称> at <ip>.`。TTY 下用 `⠋⠙⠹…` 转圈动画在同一行原地刷新
+（每 0.1 秒），IP 未就绪时显示 `SSH: waiting for connection`，连上后显示
+`Cloud-init status: running (15s elapsed)`；输出被重定向时不做动画，
+每 15 秒逐行追加一次状态。`--verbose` 还会追踪 `cloud-init-output.log`
+的最新输出。
 
 退出码约定：`0` 成功，`1` 业务失败，`2` 参数错误。
 

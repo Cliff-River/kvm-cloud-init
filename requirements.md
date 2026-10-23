@@ -131,6 +131,13 @@ kvmci create <实例名> [--template 模板] [--yes] [--force] [--no-wait] [--ve
      结构化解析（禁止正则解析），每 2 秒轮询一次。
    - `status` 为 `running` / `not started` → 继续等待；
      `done` → 成功；`error` → 失败。
+   - 等待过程不得静默：进入等待时打印一次提示；SSH 首次可达时打印
+     `Connected to <name> at <ip>.`。
+   - TTY：等待期间用 `⠋⠙⠹…` 转圈动画在同一行原地刷新（每 0.1 秒），
+     并显示状态与耗时；SSH 未就绪时显示 `SSH: waiting for connection`，
+     连上后显示 `Cloud-init status: <status> (<n>s elapsed)`。
+   - 非 TTY：不做动画，每 15 秒逐行追加一次状态心跳。
+   - verbose 的 TTY 滚动区域已在标题行加入转圈动画，不再重复心跳。
 3. 成功：打印 `Cloud-init completed successfully.`（可附耗时），退出码 0。
 4. 失败：
    - 向 stderr 打印 `Cloud-init failed:`；
