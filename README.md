@@ -113,7 +113,10 @@ While waiting it prints `Waiting for cloud-init to complete...`, then
 spinner (`⠋⠙⠹…`) refreshed in place every 0.1s, including an
 `SSH: waiting for connection` phase before the IP is available. When output is
 redirected it appends a status line every 15 seconds instead. `--verbose` also
-streams the last lines of `cloud-init-output.log`.
+streams the last 3 lines of `cloud-init-output.log` plus the last 3 lines of
+the debug `/var/log/cloud-init.log` (which grows continuously). Cloud-init logs
+are usually root/group-only, so reads automatically fall back to `sudo -n`; the
+SSH user therefore needs passwordless sudo to see them.
 
 Exit codes are `0` success, `1` business failure, `2` usage error.
 
@@ -351,7 +354,9 @@ stderr 打印 `Cloud-init failed:`、`--long` 摘要与
 （每 0.1 秒），IP 未就绪时显示 `SSH: waiting for connection`，连上后显示
 `Cloud-init status: running (15s elapsed)`；输出被重定向时不做动画，
 每 15 秒逐行追加一次状态。`--verbose` 还会追踪 `cloud-init-output.log`
-的最新输出。
+末尾 3 行与持续增长的调试日志 `/var/log/cloud-init.log` 末尾 3 行。
+cloud-init 日志通常仅 root/组可读，读取失败时会自动回退到 `sudo -n`，
+因此 SSH 用户需要免密 sudo 才能看到日志。
 
 退出码约定：`0` 成功，`1` 业务失败，`2` 参数错误。
 
