@@ -49,21 +49,21 @@ def parse_size(value: str | int) -> int:
     """
     if isinstance(value, int):
         if value <= 0:
-            raise ValueError(f"容量必须为正数：{value}")
+            raise ValueError(f"Capacity must be positive: {value}")
         return value
     text = str(value).strip().upper()
     if not text:
-        raise ValueError("容量不能为空")
+        raise ValueError("Capacity must not be empty")
     suffix = text[-1] if not text[-1].isdigit() else ""
     number = text[: -len(suffix)] if suffix else text
     if suffix not in _UNIT_FACTORS:
-        raise ValueError(f"无法识别的容量单位：{value!r}（支持 K/M/G/T/P/E）")
+        raise ValueError(f"Unknown capacity unit: {value!r} (supported: K/M/G/T/P/E)")
     try:
         amount = float(number) if "." in number else int(number)
     except ValueError as exc:
-        raise ValueError(f"无法解析容量：{value!r}") from exc
+        raise ValueError(f"Cannot parse capacity: {value!r}") from exc
     if amount <= 0:
-        raise ValueError(f"容量必须为正数：{value!r}")
+        raise ValueError(f"Capacity must be positive: {value!r}")
     return int(amount * _UNIT_FACTORS[suffix])
 
 
@@ -72,7 +72,7 @@ def read_info(path: str) -> Qcow2Info:
     with open(path, "rb") as fh:
         header = fh.read(_HEADER_SIZE)
     if len(header) < _HEADER_SIZE or header[:4] != QCOW2_MAGIC:
-        raise ValueError(f"{path} 不是有效的 qcow2 文件")
+        raise ValueError(f"{path} is not a valid qcow2 file")
     backing_offset = struct.unpack(">Q", header[_BACKING_OFFSET_OFFSET : _BACKING_OFFSET_OFFSET + 8])[0]
     backing_size = struct.unpack(">I", header[_BACKING_SIZE_OFFSET : _BACKING_SIZE_OFFSET + 4])[0]
     virtual_size = struct.unpack(">Q", header[_VIRTUAL_SIZE_OFFSET : _VIRTUAL_SIZE_OFFSET + 8])[0]

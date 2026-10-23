@@ -49,7 +49,7 @@ def test_missing_template_reference(project_dir) -> None:
     (project_dir / "instances.conf").write_text(
         "bad:\n  template: ghost\n"
     )
-    with pytest.raises(ConfigError, match="模板 ghost"):
+    with pytest.raises(ConfigError, match="references template ghost"):
         ConfigStore.load(project_dir)
 
 
@@ -68,7 +68,7 @@ def test_unknown_field_rejected(project_dir) -> None:
     (project_dir / "templates.conf").write_text(
         "bad:\n  image: x.qcow2\n  bogus: 1\n"
     )
-    with pytest.raises(ConfigError, match="未知字段"):
+    with pytest.raises(ConfigError, match="Unknown fields"):
         ConfigStore.load(project_dir)
 
 
@@ -76,7 +76,7 @@ def test_template_requires_path_or_inline(project_dir) -> None:
     (project_dir / "templates.conf").write_text(
         "bad:\n  image: x.qcow2\n"
     )
-    with pytest.raises(ConfigError, match="path 或内联"):
+    with pytest.raises(ConfigError, match="path or inline"):
         ConfigStore.load(project_dir)
 
 
@@ -86,7 +86,7 @@ def test_template_requires_path_or_inline(project_dir) -> None:
 )
 def test_legacy_wrapper_key_rejected(project_dir, filename: str, wrapper: str) -> None:
     (project_dir / filename).write_text(f"{wrapper}:\n  x: {{}}\n")
-    with pytest.raises(ConfigError, match="已废弃的顶层键"):
+    with pytest.raises(ConfigError, match="deprecated top-level key"):
         ConfigStore.load(project_dir)
 
 

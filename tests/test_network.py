@@ -79,18 +79,18 @@ def test_skips_loopback_and_ipv6() -> None:
 
 def test_timeout_raises_network_error() -> None:
     dom = _Dom(RUNNING, {})
-    with pytest.raises(NetworkError, match="60|未获得"):
+    with pytest.raises(NetworkError, match="did not obtain"):
         # timeout=0 时先查询一次即超时
         network.find_ipv4(_Conn(dom), "vm1", timeout=0,
                           clock=lambda: 0.0, sleep=lambda s: None)
 
 
 def test_missing_domain_raises() -> None:
-    with pytest.raises(NetworkError, match="不存在"):
+    with pytest.raises(NetworkError, match="does not exist"):
         network.find_ipv4(_Conn(None), "ghost")
 
 
 def test_shutoff_domain_raises() -> None:
     dom = _Dom(libvirt.VIR_DOMAIN_SHUTOFF, {})
-    with pytest.raises(NetworkError, match="运行状态"):
+    with pytest.raises(NetworkError, match="not running"):
         network.find_ipv4(_Conn(dom), "vm1")

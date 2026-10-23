@@ -71,9 +71,9 @@ def find_ipv4(
     """返回域的首个可用 IPv4 地址，超时抛 NetworkError。"""
     dom = lookup_domain(conn, name)
     if dom is None:
-        raise NetworkError(f"实例 {name} 不存在，无法查询 IP 地址")
+        raise NetworkError(f"Instance {name} does not exist, cannot query its IP address")
     if dom.state(0)[0] != libvirt.VIR_DOMAIN_RUNNING:
-        raise NetworkError(f"实例 {name} 未处于运行状态，无法查询 IP 地址")
+        raise NetworkError(f"Instance {name} is not running, cannot query its IP address")
 
     deadline = clock() + timeout
     while True:
@@ -82,9 +82,8 @@ def find_ipv4(
             return found
         if clock() >= deadline:
             raise NetworkError(
-                f"实例 {name} 在 {timeout} 秒内未获得可用 IP 地址；"
-                "请确认网络（DHCP）、已安装 qemu-guest-agent，"
-                "或用 virsh domifaddr "
-                f"{name} --source lease|agent|arp 进一步排查"
+                f"Instance {name} did not obtain a usable IP address within {timeout}s; "
+                "check the network (DHCP) and that qemu-guest-agent is installed, "
+                f"or inspect with 'virsh domifaddr {name} --source lease|agent|arp'"
             )
         sleep(interval)

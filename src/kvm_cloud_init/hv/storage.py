@@ -52,7 +52,7 @@ def upload_file(
 ) -> libvirt.virStorageVol:
     """在池中创建卷并通过 libvirt stream 上传本地文件内容。"""
     if not os.path.isfile(local_path):
-        raise ProvisionError(f"待上传文件不存在：{local_path}")
+        raise ProvisionError(f"File to upload does not exist: {local_path}")
     conn = pool.connect()
     vol = pool.createXML(volume_xml(name, capacity_bytes, fmt), 0)
     stream = conn.newStream(0)
@@ -91,7 +91,7 @@ def volume_path(vol: libvirt.virStorageVol) -> str:
     root = ET.fromstring(vol.XMLDesc(0))
     target = root.find("./target/path")
     if target is None or not target.text:
-        raise ProvisionError("存储卷 XML 中缺少 target/path")
+        raise ProvisionError("Storage volume XML is missing target/path")
     return target.text
 
 
@@ -126,7 +126,8 @@ def delete_path(
         )
         if result.returncode != 0:
             raise ProvisionError(
-                f"无法删除残留文件 {path}：libvirt 卷删除与本地删除均失败，"
-                f"且 sudo rm 不可用（{result.stderr.strip() or '需要密码'}）"
+                f"Cannot delete leftover file {path}: both libvirt volume deletion "
+                "and local file deletion failed, "
+                f"and sudo rm is unavailable ({result.stderr.strip() or 'password required'})"
             )
         return "sudo"

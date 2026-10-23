@@ -49,7 +49,7 @@ class TestQcow2Header:
     def test_bad_magic_raises(self, tmp_path) -> None:
         bad = tmp_path / "bad.qcow2"
         bad.write_bytes(b"not a qcow2 file" + b"\0" * 100)
-        with pytest.raises(ValueError, match="不是有效的 qcow2"):
+        with pytest.raises(ValueError, match="not a valid qcow2"):
             qcow2.read_info(str(bad))
 
     def test_chain_stops_without_backing(self, make_qcow2, tmp_path) -> None:

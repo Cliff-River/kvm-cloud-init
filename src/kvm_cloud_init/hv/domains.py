@@ -120,11 +120,11 @@ def shutdown_and_wait(
     name = dom.name()
     state = dom.state(0)[0]
     if state == libvirt.VIR_DOMAIN_SHUTOFF:
-        log(f"实例 {name} 已处于关机状态。")
+        log(f"Instance {name} is already shut off.")
         return
 
     if state in (libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_BLOCKED):
-        log(f"实例 {name} 正在运行，发送关机信号 ...")
+        log(f"Instance {name} is running, sending shutdown signal ...")
         dom.shutdown()
 
     deadline = time.monotonic() + timeout
@@ -132,23 +132,42 @@ def shutdown_and_wait(
     while time.monotonic() < deadline:
         state = dom.state(0)[0]
         if state == libvirt.VIR_DOMAIN_SHUTOFF:
-            log(f"实例 {name} 已关闭。")
+            log(f"Instance {name} has shut down.")
             return
         elapsed = int(timeout - (deadline - time.monotonic()))
         # 每 5 秒播报一次等待进度，避免刷屏
         if elapsed - last_tick >= 5:
             last_tick = elapsed
-            log(f"等待实例 {name} 关机中 ... 已等待 {elapsed} 秒")
+            log(f"Waiting for instance {name} to shut down ... {elapsed}s elapsed")
         time.sleep(1)
 
     if force:
-        log(f"实例 {name} 未在 {timeout} 秒内关闭，执行强制断电。")
+        log(f"Instance {name} did not shut down within {timeout}s; forcing power off.")
         dom.destroy()
         return
     raise ShutdownTimeout(
-        f"虚拟机 {name} 在 {timeout} 秒内未关闭；"
-        "可加 --force 强制关机，或用 virsh 检查客户机状态"
+        f"Instance {name} did not shut down within {timeout}s; "
+        "retry with --force to power it off, or inspect the guest state with virsh"
     )
+
+
+def stop_domain(
+    conn: libvirt.virConnect,
+    name: str,
+    timeout: int,
+    force: bool = False,
+    log: Callable[[str], None] = print,
+) -> bool:
+    """优雅关闭实例；域不存在时返回 False。
+
+    ``stop`` 子命令与 ``destroy`` 共用这一套关机逻辑：
+    ACPI shutdown -> 轮询 ``timeout`` 秒 -> 仅在 ``force`` 时强制断电。
+    """
+    dom = lookup_domain(conn, name)
+    if dom is None:
+        return False
+    shutdown_and_wait(dom, timeout, force, log=log)
+    return True
 
 
 def destroy_domain(
@@ -174,11 +193,11 @@ def destroy_domain(
     leftovers = collect_leftover_files(dom, pool_target_path(pool))
     snap_count = len(dom.snapshotListNames(0))
     if snap_count:
-        log(f"删除 {snap_count} 个快照 ...")
+        log(f"Deleting {snap_count} snapshot(s) ...")
     _delete_all_snapshots(dom)
     pool.refresh(0)
 
-    log(f"取消定义域 {name}（含 NVRAM/快照/检查点） ...")
+    log(f"Undefining domain {name} (NVRAM/snapshots/checkpoints) ...")
     undefine_warned = False
     try:
         dom.undefineFlags(_UNDEFINE_FLAGS)
@@ -192,11 +211,14 @@ def destroy_domain(
     pool.refresh(0)
 
     if leftovers:
-        log(f"清理 {len(leftovers)} 个残留存储文件 ...")
+        log(f"Cleaning up {len(leftovers)} leftover storage file(s) ...")
     for path in leftovers:
         storage.delete_path(conn, pool, path)
 
     if undefine_warned:
         # 不阻断流程，但提示用户核对（与原 bash 行为一致）
-        log(f"警告：undefine {name} 报告过非致命错误，请用 virsh vol-list {pool_name} 核对")
+        log(
+            f"Warning: undefine {name} reported non-fatal errors; "
+            f"check 'virsh vol-list {pool_name}'"
+        )
     return True

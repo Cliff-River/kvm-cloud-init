@@ -38,12 +38,15 @@ def connect(uri: str = SYSTEM_URI) -> libvirt.virConnect:
         conn = libvirt.open(uri)
     except libvirt.libvirtError as exc:
         raise LibvirtConnectionError(
-            f"无法连接 {uri}：{exc}。"
-            "请确认 libvirtd 已运行（systemctl status libvirtd），"
-            "且当前用户属于 libvirt 与 kvm 组（加入后需重新登录）。"
+            f"Cannot connect to {uri}: {exc}. "
+            "Make sure libvirtd is running (systemctl status libvirtd) "
+            "and the current user belongs to the libvirt and kvm groups "
+            "(log in again after adding the groups)."
         ) from exc
     if conn is None:
-        raise LibvirtConnectionError(f"无法连接 {uri}：libvirt.open 返回空连接")
+        raise LibvirtConnectionError(
+            f"Cannot connect to {uri}: libvirt.open returned an empty connection"
+        )
     return conn
 
 
@@ -52,7 +55,7 @@ def get_pool(conn: libvirt.virConnect, name: str, refresh: bool = False) -> libv
     try:
         pool = conn.storagePoolLookupByName(name)
     except libvirt.libvirtError as exc:
-        raise ProvisionError(f"找不到 libvirt 存储池 {name!r}：{exc}") from exc
+        raise ProvisionError(f"libvirt storage pool {name!r} not found: {exc}") from exc
     if pool.info()[0] != libvirt.VIR_STORAGE_POOL_RUNNING:
         pool.create(0)
     if refresh:
@@ -65,5 +68,5 @@ def pool_target_path(pool: libvirt.virStoragePool) -> str:
     root = ET.fromstring(pool.XMLDesc(0))
     target = root.find("./target/path")
     if target is None or not target.text:
-        raise ProvisionError("存储池 XML 中缺少 target/path")
+        raise ProvisionError("Storage pool XML is missing target/path")
     return target.text

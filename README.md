@@ -61,15 +61,21 @@ uv sync
 # 1. Review/edit the config files and templates/<name>/{meta-data,network-config,user-data}
 # 2. List available templates
 uv run kvmci templates
-# 3. Create an instance defined in instances.conf (idempotent)
+# 3. Create an instance defined in instances.conf (idempotent, waits for cloud-init)
 uv run kvmci create rocky-llm
 # 4. Inspect
 uv run kvmci list
-# 5. SSH into the instance (key + real IP are resolved automatically)
+uv run kvmci status rocky-llm
+uv run kvmci cloud-init status rocky-llm
+# 5. Start / stop / reboot lifecycle
+uv run kvmci stop rocky-llm
+uv run kvmci start rocky-llm
+uv run kvmci reboot rocky-llm
+# 6. SSH into the instance (key + real IP are resolved automatically)
 uv run kvmci shell rocky-llm
-# 6. Run a one-off command
+# 7. Run a one-off command
 uv run kvmci exec rocky-llm -- uname -a
-# 7. Destroy (also removes the auto-generated key pair)
+# 8. Destroy (also removes the auto-generated key pair)
 uv run kvmci destroy rocky-llm
 ```
 
@@ -77,12 +83,32 @@ uv run kvmci destroy rocky-llm
 
 | Command | Description |
 | --- | --- |
-| `create <name> [--template T] [--yes] [--force]` | Create the instance; a same-named domain is destroyed first. `--template` overrides the instance's template reference, or allows creating an unregistered instance. `--yes` skips the `production` confirmation; `--force` forces removal of a `production` same-named instance (equivalent to `--yes` for that check). Neither works on `protected`. Also generates `keys/<name>` + `keys/<name>.pub` and injects the public key into the rendered `user-data` at runtime. |
+| `create <name> [--template T] [--yes] [--force] [--no-wait] [--verbose]` | Create the instance; a same-named domain is destroyed first. Waits for cloud-init by default (`--no-wait` returns immediately; `--verbose` shows a rolling 7-line view). `--template` overrides the instance's template reference, or allows creating an unregistered instance. `--yes` skips the `production` confirmation; `--force` forces removal of a `production` same-named instance (equivalent to `--yes` for that check). Neither works on `protected`. Also generates `keys/<name>` + `keys/<name>.pub` and injects the public key into the rendered `user-data` at runtime. |
 | `destroy <name> [--force] [--yes]` | Graceful shutdown (waits up to `shutdown_timeout` seconds), delete snapshots, undefine with NVRAM and all storage, then delete the auto-generated key pair `keys/<name>` + `keys/<name>.pub`. `--force` powers off on timeout; `--yes` skips the `production` confirmation. `protected` instances are always rejected (and their keys are kept). |
+| `start <name>` | Start a shut-off instance (`dom.create`). Already running is a no-op with `already running` and exit 0. |
+| `stop <name> [--force]` | Graceful ACPI shutdown, polling for up to `shutdown_timeout` seconds. `--force` does **not** skip the graceful attempt; it only powers the guest off after the timeout (same as `destroy --force`). Does not undefine or delete storage/keys. |
+| `reboot <name>` | ACPI reboot of a running instance; a shut-off guest is an error (exit 1). |
+| `status <name>` | Read-only `Name` / `Template` / `State` / `vCPUs` / `Memory` / `IPv4`; `IPv4` falls back to `-` when it cannot be resolved. |
+| `cloud-init status <name>` | Run `cloud-init status --long`. Exit code: `0` done, `2` running / not started, `1` error or query failure. |
+| `cloud-init log <name> [-f / --follow]` | Print `/var/log/cloud-init.log`; `-f` streams it until cloud-init reports done (`0`) or error (`1`). |
 | `list` | Configured instances plus any unregistered libvirt domains, with live state. |
 | `templates` | List templates from `templates.conf`. |
 | `shell <name>` | Open an interactive SSH session. Uses the instance's private key and the **actual** IPv4 address discovered from libvirt (DHCP lease → qemu-guest-agent → ARP), never the address declared in `network-config`. |
 | `exec <name> -- <command>` | Run one command non-interactively over SSH. Everything after `--` is joined and passed to the remote shell; stdout/stderr are streamed and the remote exit status becomes the `kvmci` exit code. |
+
+### Waiting for cloud-init
+
+`create` waits for cloud-init after the domain starts. IP/SSH is retried every
+2 seconds for up to 300 seconds; the status is read with
+`cloud-init status --format=json` (parsed with `json.loads`). On success it
+prints `Cloud-init completed successfully in <n>s.` and exits `0`. On failure
+it prints `Cloud-init failed:` plus the `--long` summary and the last 20 lines
+of `/var/log/cloud-init-output.log`, then exits `1` (the instance keeps
+running). `Ctrl+C` stops waiting, prints
+`Stopped waiting for cloud-init. Instance <name> keeps running.`, and exits
+`0`.
+
+Exit codes are `0` success, `1` business failure, `2` usage error.
 
 ## Deletion Protection
 
@@ -268,15 +294,21 @@ uv sync
 # 1. 检查/编辑配置文件与 templates/<名称>/ 下的 cloud-init 三件套
 # 2. 查看可用模板
 uv run kvmci templates
-# 3. 创建 instances.conf 中定义的实例（幂等，可重复执行）
+# 3. 创建 instances.conf 中定义的实例（幂等，默认等待 cloud-init）
 uv run kvmci create rocky-llm
 # 4. 查看状态
 uv run kvmci list
-# 5. SSH 登录实例（自动使用密钥与实际 IP）
+uv run kvmci status rocky-llm
+uv run kvmci cloud-init status rocky-llm
+# 5. 启停与重启
+uv run kvmci stop rocky-llm
+uv run kvmci start rocky-llm
+uv run kvmci reboot rocky-llm
+# 6. SSH 登录实例（自动使用密钥与实际 IP）
 uv run kvmci shell rocky-llm
-# 6. 执行一次性命令
+# 7. 执行一次性命令
 uv run kvmci exec rocky-llm -- uname -a
-# 7. 销毁（同时删除自动生成的密钥对）
+# 8. 销毁（同时删除自动生成的密钥对）
 uv run kvmci destroy rocky-llm
 ```
 
@@ -284,12 +316,30 @@ uv run kvmci destroy rocky-llm
 
 | 命令 | 说明 |
 | --- | --- |
-| `create <名称> [--template T] [--yes] [--force]` | 创建实例，同名域会先被销毁；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板；`--yes` 跳过 production 确认；`--force` 强制删除 production 同名旧实例后重建（对该检查等价于 `--yes`）；二者对 protected 均无效。同时生成 `keys/<名称>` 与 `keys/<名称>.pub`，并在运行时把公钥注入渲染后的 `user-data` |
+| `create <名称> [--template T] [--yes] [--force] [--no-wait] [--verbose]` | 创建实例，同名域会先被销毁；默认等待 cloud-init 完成（`--no-wait` 立即返回，`--verbose` 以 7 行滚动区域展示输出）；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板；`--yes` 跳过 production 确认；`--force` 强制删除 production 同名旧实例后重建（对该检查等价于 `--yes`）；二者对 protected 均无效。同时生成 `keys/<名称>` 与 `keys/<名称>.pub`，并在运行时把公钥注入渲染后的 `user-data` |
 | `destroy <名称> [--force] [--yes]` | 优雅关机（等待 `shutdown_timeout` 秒）、删除快照、带 NVRAM undefine 并清理全部存储，随后删除自动生成的密钥对 `keys/<名称>` 与 `keys/<名称>.pub`；`--force` 超时后强制断电；`--yes` 跳过 production 确认；protected 实例始终被拒绝（密钥一并保留） |
+| `start <名称>` | 启动已关机的实例（`dom.create`）；已运行时提示 `already running` 并以 0 退出 |
+| `stop <名称> [--force]` | ACPI 优雅关机，按 `shutdown_timeout` 轮询；`--force` **不会**跳过优雅关机，仅在超时后强制断电（与 `destroy --force` 语义一致）；不 undefine、不删除存储与密钥 |
+| `reboot <名称>` | 对运行中的实例发送 ACPI reboot；已关机时报错退出 1 |
+| `status <名称>` | 只读输出 `Name` / `Template` / `State` / `vCPUs` / `Memory` / `IPv4`；IPv4 解析失败时显示 `-` |
+| `cloud-init status <名称>` | 执行 `cloud-init status --long`；退出码：done 为 0，running / not started 为 2，error 或查询失败为 1 |
+| `cloud-init log <名称> [-f / --follow]` | 输出 `/var/log/cloud-init.log`；`-f` 实时跟随到 cloud-init done（0）或 error（1） |
 | `list` | 列出已登记实例与未登记的 libvirt 域及实时状态 |
 | `templates` | 列出 `templates.conf` 中定义的模板 |
 | `shell <名称>` | 打开 SSH 交互式登录会话；使用实例私钥与 libvirt 实测 IPv4 地址（DHCP 租约 → qemu-guest-agent → ARP 依次回退），绝不信任 `network-config` 中声明的地址 |
 | `exec <名称> -- <命令>` | 非交互执行一条命令；`--` 之后的所有参数拼接后交给远端 shell，实时透传 stdout/stderr，远端退出码即 `kvmci` 退出码 |
+
+### 等待 cloud-init
+
+`create` 在域启动后默认等待 cloud-init：IP/SSH 每 2 秒重试，最多 300 秒；
+通过 `cloud-init status --format=json` 读取状态（用 `json.loads` 解析）。
+成功时打印 `Cloud-init completed successfully in <n>s.` 并退出 0；失败时向
+stderr 打印 `Cloud-init failed:`、`--long` 摘要与
+`/var/log/cloud-init-output.log` 末尾 20 行，退出 1（实例保持运行）。
+`Ctrl+C` 会停止等待并打印
+`Stopped waiting for cloud-init. Instance <名称> keeps running.`，退出 0。
+
+退出码约定：`0` 成功，`1` 业务失败，`2` 参数错误。
 
 ## 删除保护
 

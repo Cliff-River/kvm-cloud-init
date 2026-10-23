@@ -21,24 +21,99 @@ def test_templates_command(capsys) -> None:
 def test_create_dispatch(monkeypatch) -> None:
     calls = {}
 
-    def fake_create(store, conn, name, template_name=None, yes=False, force=False):
-        calls.update(name=name, template=template_name, yes=yes, force=force)
+    def fake_create(
+        store,
+        conn,
+        name,
+        template_name=None,
+        yes=False,
+        force=False,
+        no_wait=False,
+        verbose=False,
+    ):
+        calls.update(
+            name=name,
+            template=template_name,
+            yes=yes,
+            force=force,
+            no_wait=no_wait,
+            verbose=verbose,
+        )
+        return 0
 
     monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
     monkeypatch.setattr(cli.provision, "create_instance", fake_create)
 
     assert cli.main(["create", "rocky-lvm"]) == 0
-    assert calls == {"name": "rocky-lvm", "template": None, "yes": False, "force": False}
+    assert calls == {
+        "name": "rocky-lvm",
+        "template": None,
+        "yes": False,
+        "force": False,
+        "no_wait": False,
+        "verbose": False,
+    }
 
     assert cli.main(["create", "adhoc", "--template", "Debian"]) == 0
-    assert calls == {"name": "adhoc", "template": "Debian", "yes": False, "force": False}
+    assert calls == {
+        "name": "adhoc",
+        "template": "Debian",
+        "yes": False,
+        "force": False,
+        "no_wait": False,
+        "verbose": False,
+    }
+
+
+def test_create_wait_flags_dispatch(monkeypatch) -> None:
+    calls = {}
+
+    def fake_create(
+        store,
+        conn,
+        name,
+        template_name=None,
+        yes=False,
+        force=False,
+        no_wait=False,
+        verbose=False,
+    ):
+        calls.update(no_wait=no_wait, verbose=verbose)
+        return 0
+
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(cli.provision, "create_instance", fake_create)
+
+    assert cli.main(["create", "rocky-lvm", "--no-wait"]) == 0
+    assert calls == {"no_wait": True, "verbose": False}
+
+    assert cli.main(["create", "rocky-lvm", "--verbose"]) == 0
+    assert calls == {"no_wait": False, "verbose": True}
+
+
+def test_create_returns_wait_failure_code(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision, "create_instance", lambda *args, **kwargs: 1
+    )
+    assert cli.main(["create", "rocky-lvm"]) == 1
 
 
 def test_create_yes_and_force_dispatch(monkeypatch) -> None:
     calls = {}
 
-    def fake_create(store, conn, name, template_name=None, yes=False, force=False):
+    def fake_create(
+        store,
+        conn,
+        name,
+        template_name=None,
+        yes=False,
+        force=False,
+        no_wait=False,
+        verbose=False,
+    ):
         calls.update(yes=yes, force=force)
+        return 0
 
     monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
     monkeypatch.setattr(cli.provision, "create_instance", fake_create)
@@ -97,7 +172,7 @@ def test_unknown_instance_returns_1(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
     rc = cli.main(["create", "not-exist"])
     assert rc == 1
-    assert "错误" in capsys.readouterr().err
+    assert "Error" in capsys.readouterr().err
 
 
 def test_bad_args() -> None:
@@ -135,4 +210,93 @@ def test_exec_dispatch_joins_command_after_separator(monkeypatch) -> None:
 def test_exec_without_command_is_usage_error(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
     assert cli.main(["exec", "rocky-lvm"]) == 2
-    assert "命令" in capsys.readouterr().err
+    assert "remote command" in capsys.readouterr().err
+
+
+def test_start_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "start_instance",
+        lambda store, conn, name: calls.update(name=name),
+    )
+    assert cli.main(["start", "rocky-lvm"]) == 0
+    assert calls == {"name": "rocky-lvm"}
+
+
+def test_stop_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "stop_instance",
+        lambda store, conn, name, force=False: calls.update(
+            name=name, force=force
+        ),
+    )
+    assert cli.main(["stop", "rocky-lvm"]) == 0
+    assert calls == {"name": "rocky-lvm", "force": False}
+
+    assert cli.main(["stop", "rocky-lvm", "--force"]) == 0
+    assert calls == {"name": "rocky-lvm", "force": True}
+
+
+def test_reboot_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "reboot_instance",
+        lambda store, conn, name: calls.update(name=name),
+    )
+    assert cli.main(["reboot", "rocky-lvm"]) == 0
+    assert calls == {"name": "rocky-lvm"}
+
+
+def test_status_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "status_instance",
+        lambda store, conn, name: calls.update(name=name),
+    )
+    assert cli.main(["status", "rocky-lvm"]) == 0
+    assert calls == {"name": "rocky-lvm"}
+
+
+def test_cloud_init_status_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "cloud_init_status",
+        lambda conn, name: calls.update(name=name) or 2,
+    )
+    assert cli.main(["cloud-init", "status", "rocky-lvm"]) == 2
+    assert calls == {"name": "rocky-lvm"}
+
+
+def test_cloud_init_log_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "cloud_init_log",
+        lambda conn, name, follow=False: calls.update(
+            name=name, follow=follow
+        )
+        or 0,
+    )
+    assert cli.main(["cloud-init", "log", "rocky-lvm"]) == 0
+    assert calls == {"name": "rocky-lvm", "follow": False}
+
+    assert cli.main(["cloud-init", "log", "rocky-lvm", "-f"]) == 0
+    assert calls == {"name": "rocky-lvm", "follow": True}
+
+
+def test_cloud_init_requires_subcommand() -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["cloud-init"])
+    assert exc.value.code == 2

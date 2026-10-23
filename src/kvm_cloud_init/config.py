@@ -107,15 +107,15 @@ class ResolvedInstance:
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
-        raise ConfigError(f"配置文件不存在：{path}")
+        raise ConfigError(f"Config file not found: {path}")
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
-        raise ConfigError(f"配置文件 {path} 不是合法 YAML：{exc}") from exc
+        raise ConfigError(f"Config file {path} is not valid YAML: {exc}") from exc
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ConfigError(f"配置文件 {path} 的顶层结构必须是键值映射")
+        raise ConfigError(f"Top-level structure of config file {path} must be a mapping")
     return data
 
 
@@ -127,24 +127,26 @@ def _load_table(path: Path, legacy_wrapper: str) -> dict[str, Any]:
     data = _load_yaml(path)
     if legacy_wrapper in data and isinstance(data[legacy_wrapper], dict):
         raise ConfigError(
-            f"{path.name} 仍使用已废弃的顶层键 “{legacy_wrapper}:”，"
-            f"请将其下的条目提升到顶层（删除该键并减少一层缩进）"
+            f"{path.name} still uses the deprecated top-level key {legacy_wrapper!r}; "
+            "move its entries to the top level (remove the key and one indentation level)"
         )
     return data
 
 
 def _as_int(value: Any, context: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ConfigError(f"{context} 必须是整数，当前值：{value!r}")
+        raise ConfigError(f"{context} must be an integer, got: {value!r}")
     if value <= 0:
-        raise ConfigError(f"{context} 必须为正整数，当前值：{value}")
+        raise ConfigError(f"{context} must be a positive integer, got: {value}")
     return value
 
 
 def _choice(value: Any, options: tuple[str, ...], context: str) -> str:
     text = str(value).lower()
     if text not in options:
-        raise ConfigError(f"{context} 必须是 {'/'.join(options)} 之一，当前值：{value!r}")
+        raise ConfigError(
+            f"{context} must be one of {'/'.join(options)}, got: {value!r}"
+        )
     return text
 
 
@@ -152,29 +154,29 @@ def _parse_defaults(raw: dict[str, Any]) -> Defaults:
     allowed = set(Defaults.__dataclass_fields__)
     unknown = set(raw) - allowed
     if unknown:
-        raise ConfigError(f"default.conf 存在未知字段：{', '.join(sorted(unknown))}")
+        raise ConfigError(f"Unknown fields in default.conf: {', '.join(sorted(unknown))}")
     defaults = Defaults()
     if "storage_pool" in raw:
         defaults.storage_pool = str(raw["storage_pool"])
     if "image_dir" in raw:
         defaults.image_dir = str(raw["image_dir"])
     if "memory" in raw:
-        defaults.memory = _as_int(raw["memory"], "default.conf 的 memory")
+        defaults.memory = _as_int(raw["memory"], "default.conf field memory")
     if "vcpus" in raw:
-        defaults.vcpus = _as_int(raw["vcpus"], "default.conf 的 vcpus")
+        defaults.vcpus = _as_int(raw["vcpus"], "default.conf field vcpus")
     if "network" in raw:
         defaults.network = str(raw["network"])
     if "firmware" in raw:
-        defaults.firmware = _choice(raw["firmware"], _VALID_FIRMWARE, "default.conf 的 firmware")
+        defaults.firmware = _choice(raw["firmware"], _VALID_FIRMWARE, "default.conf field firmware")
     if "graphics" in raw:
-        defaults.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, "default.conf 的 graphics")
+        defaults.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, "default.conf field graphics")
     if "video" in raw:
-        defaults.video = _choice(raw["video"], _VALID_VIDEO, "default.conf 的 video")
+        defaults.video = _choice(raw["video"], _VALID_VIDEO, "default.conf field video")
     if "level" in raw:
-        defaults.level = _choice(raw["level"], _VALID_LEVEL, "default.conf 的 level")
+        defaults.level = _choice(raw["level"], _VALID_LEVEL, "default.conf field level")
     if "shutdown_timeout" in raw:
         defaults.shutdown_timeout = _as_int(
-            raw["shutdown_timeout"], "default.conf 的 shutdown_timeout"
+            raw["shutdown_timeout"], "default.conf field shutdown_timeout"
         )
     return defaults
 
@@ -185,7 +187,9 @@ def _extract_docs(raw: dict[str, Any], context: str) -> dict[str, str]:
         if name in raw:
             value = raw[name]
             if value is not None and not isinstance(value, str):
-                raise ConfigError(f"{context} 的 {name} 必须是文本块（使用 | 标量）")
+                raise ConfigError(
+                    f"{context} field {name} must be a text block (use the | scalar)"
+                )
             if value:
                 docs[name] = value
     return docs
@@ -193,9 +197,9 @@ def _extract_docs(raw: dict[str, Any], context: str) -> dict[str, str]:
 
 def _parse_template(name: str, raw: Any) -> Template:
     if not isinstance(raw, dict):
-        raise ConfigError(f"模板 {name} 的定义必须是键值映射")
+        raise ConfigError(f"Template {name} definition must be a mapping")
     if "image" not in raw or not raw["image"]:
-        raise ConfigError(f"模板 {name} 缺少必填字段 image")
+        raise ConfigError(f"Template {name} is missing required field image")
     tpl = Template(name=name, image=str(raw["image"]))
     if "path" in raw and raw["path"] is not None:
         tpl.path = str(raw["path"])
@@ -204,52 +208,52 @@ def _parse_template(name: str, raw: Any) -> Template:
     if "os_variant" in raw and raw["os_variant"] is not None:
         tpl.os_variant = str(raw["os_variant"])
     if "memory" in raw and raw["memory"] is not None:
-        tpl.memory = _as_int(raw["memory"], f"模板 {name} 的 memory")
+        tpl.memory = _as_int(raw["memory"], f"template {name} field memory")
     if "vcpus" in raw and raw["vcpus"] is not None:
-        tpl.vcpus = _as_int(raw["vcpus"], f"模板 {name} 的 vcpus")
+        tpl.vcpus = _as_int(raw["vcpus"], f"template {name} field vcpus")
     if "capacity" in raw and raw["capacity"] is not None:
         tpl.capacity = str(raw["capacity"])
     if raw.get("graphics") is not None:
-        tpl.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, f"模板 {name} 的 graphics")
+        tpl.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, f"template {name} field graphics")
     if raw.get("video") is not None:
-        tpl.video = _choice(raw["video"], _VALID_VIDEO, f"模板 {name} 的 video")
+        tpl.video = _choice(raw["video"], _VALID_VIDEO, f"template {name} field video")
     if raw.get("level") is not None:
-        tpl.level = _choice(raw["level"], _VALID_LEVEL, f"模板 {name} 的 level")
-    tpl.docs = _extract_docs(raw, f"模板 {name}")
+        tpl.level = _choice(raw["level"], _VALID_LEVEL, f"template {name} field level")
+    tpl.docs = _extract_docs(raw, f"template {name}")
     allowed = {
         "path", "image_dir", "image", "os_variant", "memory", "vcpus",
         "capacity", *_CHOICE_FIELDS, *DOC_NAMES,
     }
     unknown = set(raw) - allowed
     if unknown:
-        raise ConfigError(f"模板 {name} 存在未知字段：{', '.join(sorted(unknown))}")
+        raise ConfigError(f"Unknown fields in template {name}: {', '.join(sorted(unknown))}")
     if not tpl.path and not tpl.docs:
-        raise ConfigError(f"模板 {name} 必须设置 path 或内联 cloud-init 字段")
+        raise ConfigError(f"Template {name} must set path or inline cloud-init fields")
     return tpl
 
 
 def _parse_instance(name: str, raw: Any) -> InstanceSpec:
     if not isinstance(raw, dict):
-        raise ConfigError(f"实例 {name} 的定义必须是键值映射")
+        raise ConfigError(f"Instance {name} definition must be a mapping")
     if "template" not in raw or not raw["template"]:
-        raise ConfigError(f"实例 {name} 缺少必填字段 template")
+        raise ConfigError(f"Instance {name} is missing required field template")
     inst = InstanceSpec(name=name, template=str(raw["template"]))
     for scalar in ("memory", "vcpus"):
         if scalar in raw and raw[scalar] is not None:
-            setattr(inst, scalar, _as_int(raw[scalar], f"实例 {name} 的 {scalar}"))
+            setattr(inst, scalar, _as_int(raw[scalar], f"instance {name} field {scalar}"))
     if "capacity" in raw and raw["capacity"] is not None:
         inst.capacity = str(raw["capacity"])
     if raw.get("graphics") is not None:
-        inst.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, f"实例 {name} 的 graphics")
+        inst.graphics = _choice(raw["graphics"], _VALID_GRAPHICS, f"instance {name} field graphics")
     if raw.get("video") is not None:
-        inst.video = _choice(raw["video"], _VALID_VIDEO, f"实例 {name} 的 video")
+        inst.video = _choice(raw["video"], _VALID_VIDEO, f"instance {name} field video")
     if raw.get("level") is not None:
-        inst.level = _choice(raw["level"], _VALID_LEVEL, f"实例 {name} 的 level")
-    inst.docs = _extract_docs(raw, f"实例 {name}")
+        inst.level = _choice(raw["level"], _VALID_LEVEL, f"instance {name} field level")
+    inst.docs = _extract_docs(raw, f"instance {name}")
     allowed = {"template", *_SCALAR_FIELDS, *_CHOICE_FIELDS, *DOC_NAMES}
     unknown = set(raw) - allowed
     if unknown:
-        raise ConfigError(f"实例 {name} 存在未知字段：{', '.join(sorted(unknown))}")
+        raise ConfigError(f"Unknown fields in instance {name}: {', '.join(sorted(unknown))}")
     return inst
 
 
@@ -288,7 +292,8 @@ class ConfigStore:
         for inst in instances.values():
             if inst.template not in templates:
                 raise ConfigError(
-                    f"实例 {inst.name} 引用的模板 {inst.template} 未在 templates.conf 中定义"
+                    f"Instance {inst.name} references template {inst.template}, "
+                    "which is not defined in templates.conf"
                 )
         return cls(base, defaults, templates, instances)
 
@@ -301,12 +306,12 @@ class ConfigStore:
         inst = self.instances.get(name)
         if inst is None and not template_name:
             raise InstanceNotFound(
-                f"实例 {name} 未在 instances.conf 中定义；"
-                f"临时创建请通过 --template 指定模板"
+                f"Instance {name} is not defined in instances.conf; "
+                "use --template to create an unregistered instance"
             )
         chosen = template_name or (inst.template if inst else None)
         if chosen not in self.templates:
-            raise TemplateNotFound(f"模板 {chosen} 未在 templates.conf 中定义")
+            raise TemplateNotFound(f"Template {chosen} is not defined in templates.conf")
         tpl = self.templates[chosen]
 
         def pick(scalar: str) -> Any:
@@ -316,8 +321,8 @@ class ConfigStore:
                     return value
             return getattr(self.defaults, scalar)
 
-        memory = _as_int(pick("memory"), f"实例 {name} 的 memory")
-        vcpus = _as_int(pick("vcpus"), f"实例 {name} 的 vcpus")
+        memory = _as_int(pick("memory"), f"instance {name} field memory")
+        vcpus = _as_int(pick("vcpus"), f"instance {name} field vcpus")
         if inst is not None and inst.capacity is not None:
             capacity = inst.capacity
         else:
