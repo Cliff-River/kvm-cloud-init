@@ -32,7 +32,8 @@ def start_instance(store: ConfigStore, conn: libvirt.virConnect, name: str) -> N
         print(f"Instance {name} is already running.")
         return
     try:
-        dom.create(0)
+        # 部分 libvirt-python 绑定的 virDomain.create() 不接受 flags 参数
+        dom.create()
     except libvirt.libvirtError as exc:
         raise ProvisionError(f"Cannot start instance {name}: {exc}") from exc
     print(f"Instance {name} started.")

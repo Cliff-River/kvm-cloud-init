@@ -370,6 +370,115 @@ def test_shell_instance_requires_running_domain(level_store, monkeypatch) -> Non
         provision.shell_instance(level_store, object(), "ghost")
 
 
+def test_shell_instance_auto_starts_shutoff_domain(
+    level_store, monkeypatch, tmp_path
+) -> None:
+    from kvm_cloud_init.provision import access
+
+    class _ShutoffDom:
+        def state(self, flags: int) -> list[int]:
+            return [libvirt.VIR_DOMAIN_SHUTOFF]
+
+    key = tmp_path / "plain"
+    key.write_text("private")
+    started: list[str] = []
+    monkeypatch.setattr(
+        domains, "lookup_domain", lambda conn, name: _ShutoffDom()
+    )
+    monkeypatch.setattr(
+        access.lifecycle,
+        "start_instance",
+        lambda store, conn, name: started.append(name),
+    )
+    monkeypatch.setattr(
+        access, "ssh_target", lambda conn, name: ("10.0.0.5", "cliff", key)
+    )
+    monkeypatch.setattr(ssh, "interactive_shell", lambda *args: 0)
+
+    assert provision.shell_instance(level_store, object(), "plain") == 0
+    assert started == ["plain"]
+
+
+def test_shell_instance_does_not_restart_running_domain(
+    level_store, monkeypatch, tmp_path
+) -> None:
+    from kvm_cloud_init.provision import access
+
+    key = _prepare_ssh_target(monkeypatch, tmp_path)
+    started: list[str] = []
+    monkeypatch.setattr(
+        access.lifecycle,
+        "start_instance",
+        lambda store, conn, name: started.append(name),
+    )
+    monkeypatch.setattr(ssh, "interactive_shell", lambda *args: 0)
+
+    assert provision.shell_instance(level_store, object(), "plain") == 0
+    assert started == []
+    assert key.exists()
+
+
+def test_wait_ssh_target_retries_until_ip(monkeypatch, tmp_path) -> None:
+    from kvm_cloud_init.errors import NetworkError
+    from kvm_cloud_init.provision import access
+
+    key = tmp_path / "plain"
+    key.write_text("private")
+    target = ("10.0.0.5", "cliff", key)
+    results: list[object] = [
+        NetworkError("no IP"),
+        NetworkError("no IP"),
+        target,
+    ]
+
+    def fake_target(conn, name):
+        item = results.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(access, "ssh_target", fake_target)
+    monkeypatch.setattr(access.time, "sleep", lambda _seconds: None)
+    assert access.wait_ssh_target(object(), "plain") == target
+
+
+def test_exec_instance_auto_starts_shutoff_domain(
+    level_store, monkeypatch, tmp_path
+) -> None:
+    from kvm_cloud_init.provision import access
+
+    class _ShutoffDom:
+        def state(self, flags: int) -> list[int]:
+            return [libvirt.VIR_DOMAIN_SHUTOFF]
+
+    key = tmp_path / "plain"
+    key.write_text("private")
+    started: list[str] = []
+    captured = {}
+    monkeypatch.setattr(
+        domains, "lookup_domain", lambda conn, name: _ShutoffDom()
+    )
+    monkeypatch.setattr(
+        access.lifecycle,
+        "start_instance",
+        lambda store, conn, name: started.append(name),
+    )
+    monkeypatch.setattr(
+        access, "ssh_target", lambda conn, name: ("10.0.0.5", "cliff", key)
+    )
+
+    def fake_run(instance, host, user, key_path, command) -> int:
+        captured.update(host=host, command=command)
+        return 0
+
+    monkeypatch.setattr(ssh, "run_command", fake_run)
+
+    rc = provision.exec_instance(level_store, object(), "plain", ["hostname"])
+    assert rc == 0
+    assert started == ["plain"]
+    assert captured == {"host": "10.0.0.5", "command": "hostname"}
+
+
 def test_shell_instance_requires_recorded_user(level_store, monkeypatch, tmp_path) -> None:
     _prepare_ssh_target(monkeypatch, tmp_path)
     monkeypatch.setattr(guest, "domain_ssh_user", lambda dom: None)

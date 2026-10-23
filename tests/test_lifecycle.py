@@ -40,7 +40,7 @@ class _Dom:
     def info(self) -> list[int]:
         return list(self._info)
 
-    def create(self, flags: int = 0) -> None:
+    def create(self) -> None:
         self.create_calls += 1
 
     def reboot(self, flags: int = 0) -> None:

@@ -62,7 +62,7 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
   cidata.iso（pycdlib）→ stream 上传镜像与 ISO 到存储池（按实例命名卷）→
   可选卷扩容 → 构建 domain XML（含 `ssh-user` 元数据）→ define + start →
   默认等待 cloud-init（`--no-wait` 跳过，`--verbose` 7 行滚动）。
-- 生命周期：`start` 用 `dom.create(0)`，`stop` 与 `destroy` 共用
+- 生命周期：`start` 用 `dom.create()`（本绑定不接受 flags），`stop` 与 `destroy` 共用
   `hv/domains.shutdown_and_wait` / `stop_domain`（禁止第二套轮询）；
   `reboot` 用 `dom.reboot(0)`；`status` 只读打印六项键值。
 - cloud-init：用 paramiko 执行 `cloud-init status --format=json`（`json.loads`），
@@ -72,7 +72,8 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
   删除 `keys/<名称>` 与 `<名称>.pub`（保护级别未通过则不删）。
 - shell/exec：从域 XML 读 `ssh-user` → libvirt 实测 IPv4
   （lease→agent→arp，见 hv/network.py）→ 用 `keys/<名称>` 私钥经 paramiko
-  建立交互 shell 或执行命令；exit code 透传。
+  建立交互 shell 或执行命令；exit code 透传。`shell` 与 `exec` 在实例关机时
+  都先复用 `lifecycle.start_instance` 自动启动，再等待 IP 就绪。
 - 连接统一为 `qemu:///system`；用户需在 libvirt/kvm 组。
 - 所有面向用户的输出（help、print、警告、错误、表头、状态名）均为英文。
 

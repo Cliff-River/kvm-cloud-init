@@ -2,14 +2,63 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import libvirt
 
 from .. import ssh
 from ..config import ConfigStore
-from ..errors import ProvisionError, SshError
+from ..errors import NetworkError, ProvisionError, SshError
 from ..hv import domains, guest, network
+from . import lifecycle
+
+#: 等待实例 SSH 可达的最长时间（秒）与轮询间隔
+SSH_READY_TIMEOUT = 300
+SSH_POLL_INTERVAL = 2.0
+
+
+def _ensure_running(
+    store: ConfigStore, conn: libvirt.virConnect, name: str
+) -> None:
+    """实例未运行时自动启动，已运行则直接返回。"""
+    dom = domains.lookup_domain(conn, name)
+    if dom is None:
+        raise ProvisionError(f"Instance {name} does not exist")
+    if dom.state(0)[0] == libvirt.VIR_DOMAIN_RUNNING:
+        return
+    print(f"Instance {name} is not running; starting it ...", flush=True)
+    lifecycle.start_instance(store, conn, name)
+    print(
+        f"Waiting for {name} to become reachable over SSH ...", flush=True
+    )
+
+
+def wait_ssh_target(
+    conn: libvirt.virConnect,
+    name: str,
+    *,
+    deadline: float | None = None,
+    timeout: float = SSH_READY_TIMEOUT,
+    on_wait: Callable[[float], None] | None = None,
+) -> tuple[str, str, Path]:
+    """轮询解析 SSH 目标，直到 IP 可用或超时。"""
+    if deadline is None:
+        deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return ssh_target(conn, name)
+        except NetworkError as exc:
+            if time.monotonic() >= deadline:
+                raise SshError(
+                    f"Instance {name} did not get an IPv4 address "
+                    f"within {timeout}s"
+                ) from exc
+            if on_wait is not None:
+                on_wait(SSH_POLL_INTERVAL)
+            else:
+                time.sleep(SSH_POLL_INTERVAL)
 
 
 def ssh_target(
@@ -40,14 +89,16 @@ def ssh_target(
 
 
 def shell_instance(store: ConfigStore, conn: libvirt.virConnect, name: str) -> int:
-    """打开实例的 SSH 交互式登录会话，返回远端退出码。"""
-    host, user, key_path = ssh_target(conn, name)
+    """打开实例的 SSH 交互式登录会话，已关机时先自动启动，返回远端退出码。"""
+    _ensure_running(store, conn, name)
+    host, user, key_path = wait_ssh_target(conn, name)
     return ssh.interactive_shell(name, host, user, key_path)
 
 
 def exec_instance(
     store: ConfigStore, conn: libvirt.virConnect, name: str, command: list[str]
 ) -> int:
-    """在实例中执行一条命令（-- 之后的所有 token 拼接），返回远端退出码。"""
-    host, user, key_path = ssh_target(conn, name)
+    """在实例中执行一条命令（-- 之后的所有 token 拼接），已关机时先自动启动。"""
+    _ensure_running(store, conn, name)
+    host, user, key_path = wait_ssh_target(conn, name)
     return ssh.run_command(name, host, user, key_path, " ".join(command))

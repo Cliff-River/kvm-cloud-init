@@ -86,6 +86,6 @@ uv run kvmci destroy <实例名> [--force] [--yes]
 ## 注意事项
 
 - 三个 `.conf` 文件名虽为 .conf，但内容是 YAML。
-- libvirt-python 的部分绑定不接受 flags 参数（如 `pool.info()`、`vol.info()`），
-  返回的 info 是 list 而非具名元组，改动时先核对绑定签名。
+- libvirt-python 的部分绑定不接受 flags 参数（如 `pool.info()`、`vol.info()`、
+  `domain.create()`），返回的 info 是 list 而非具名元组，改动时先核对绑定签名。
 - 静默 libvirt 默认错误日志的注册在 `hv/client.py`，业务需自行 try/except。

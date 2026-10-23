@@ -11,8 +11,9 @@ from pathlib import Path
 import libvirt
 
 from .. import ssh
-from ..errors import CloudInitError, NetworkError
+from ..errors import CloudInitError, SshError
 from . import access
+from .access import SSH_READY_TIMEOUT
 
 #: 查询状态与等待 cloud-init 的轮询间隔（秒）
 POLL_INTERVAL = 2
@@ -23,8 +24,6 @@ PROGRESS_INTERVAL = 15
 #: TTY 转圈动画帧与刷新间隔
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_INTERVAL = 0.1
-#: 等待 SSH 可达的最长时间（秒）
-SSH_READY_TIMEOUT = 300
 #: verbose 区域最多显示 7 行：1 行状态 + 6 行输出
 VERBOSE_LINES = 6
 #: 6 行输出分别取自 output 日志与 debug 日志
@@ -93,24 +92,22 @@ def _wait_target(
     started: float = 0.0,
 ) -> tuple[str, str, Path]:
     """轮询解析 SSH 目标，直到 IP 可用或超时。"""
-    while True:
-        try:
-            return access.ssh_target(conn, name)
-        except NetworkError as exc:
-            if time.monotonic() >= deadline:
-                raise CloudInitError(
-                    f"Instance {name} did not become reachable over SSH within "
-                    f"{SSH_READY_TIMEOUT}s; use --no-wait to skip cloud-init waiting"
-                ) from exc
-            if progress is not None and progress.is_tty:
-                progress.animate(
-                    POLL_INTERVAL,
-                    "waiting for connection",
-                    started,
-                    label="SSH",
-                )
-            else:
-                time.sleep(POLL_INTERVAL)
+
+    def on_wait(seconds: float) -> None:
+        if progress is not None and progress.is_tty:
+            progress.animate(seconds, "waiting for connection", started, label="SSH")
+        else:
+            time.sleep(seconds)
+
+    try:
+        return access.wait_ssh_target(
+            conn, name, deadline=deadline, on_wait=on_wait
+        )
+    except SshError as exc:
+        raise CloudInitError(
+            f"Instance {name} did not become reachable over SSH within "
+            f"{SSH_READY_TIMEOUT}s; use --no-wait to skip cloud-init waiting"
+        ) from exc
 
 
 class _VerboseRenderer:
