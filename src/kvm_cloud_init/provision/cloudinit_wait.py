@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -26,6 +27,9 @@ SPINNER_INTERVAL = 0.1
 SSH_READY_TIMEOUT = 300
 #: verbose 区域最多显示 7 行：1 行状态 + 6 行输出
 VERBOSE_LINES = 6
+#: 6 行输出分别取自 output 日志与 debug 日志
+VERBOSE_OUTPUT_LINES = 3
+VERBOSE_DEBUG_LINES = 3
 ROWS = 7
 
 STATUS_JSON_CMD = "cloud-init status --format=json"
@@ -62,8 +66,23 @@ def _query_state(name: str, target: tuple[str, str, Path]) -> str:
 def _tail_lines(
     name: str, target: tuple[str, str, Path], path: str, count: int
 ) -> list[str]:
-    out, _err, _code = _capture(name, target, f"tail -n {count} {path}")
+    """读取文件末尾若干行；普通用户无权限时回退到 ``sudo -n``。"""
+    command = f"tail -n {count} {path}"
+    out, err, code = _capture(name, target, command)
+    if code != 0:
+        out, err, code = _capture(name, target, f"sudo -n {command}")
+    if code != 0:
+        detail = err.strip() or "permission denied"
+        raise CloudInitError(f"Cannot read {path}: {detail}")
     return out.rstrip("\n").splitlines()
+
+
+def _can_read(
+    name: str, target: tuple[str, str, Path], path: str, *, sudo: bool = False
+) -> bool:
+    prefix = "sudo -n " if sudo else ""
+    _out, _err, code = _capture(name, target, f"{prefix}test -r {path}")
+    return code == 0
 
 
 def _wait_target(
@@ -103,6 +122,7 @@ class _VerboseRenderer:
         self._rendered = 0
         self._seen: set[str] = set()
         self._frame = 0
+        self._width = shutil.get_terminal_size((80, 24)).columns
 
     @property
     def is_tty(self) -> bool:
@@ -114,7 +134,7 @@ class _VerboseRenderer:
             for line in lines:
                 if line not in self._seen:
                     self._seen.add(line)
-                    print(line)
+                    print(line, flush=True)
             return
 
         rows = [
@@ -123,6 +143,8 @@ class _VerboseRenderer:
         ]
         self._frame += 1
         rows.extend([""] * (ROWS - len(rows)))
+        # 截断到终端宽度，避免长日志换行破坏 7 行重绘的定位
+        rows = [row[: max(1, self._width - 1)] for row in rows]
         if self._rendered:
             print(f"\x1b[{self._rendered}A", end="", file=self._stream)
         for row in rows:
@@ -155,7 +177,7 @@ class _ProgressLine:
 
     def update(self, text: str) -> None:
         if not self._is_tty:
-            print(text)
+            print(text, flush=True)
             return
         prefix = "\r\x1b[2K" if self._active else ""
         self._stream.write(f"{prefix}{text}")  # type: ignore[attr-defined]
@@ -200,7 +222,7 @@ def _print_failure(name: str, target: tuple[str, str, Path]) -> None:
             print(f"Last 20 lines of {OUTPUT_LOG}:", file=sys.stderr)
             for line in tail:
                 print(line, file=sys.stderr)
-    except ssh.SshError as exc:
+    except (ssh.SshError, CloudInitError) as exc:
         print(f"Could not read cloud-init details: {exc}", file=sys.stderr)
 
 
@@ -218,7 +240,10 @@ def wait_cloud_init(
     last_progress = started
     connected = False
 
-    print("Waiting for cloud-init to complete. Press Ctrl+C to stop waiting.")
+    print(
+        "Waiting for cloud-init to complete. Press Ctrl+C to stop waiting.",
+        flush=True,
+    )
 
     try:
         while True:
@@ -231,7 +256,8 @@ def wait_cloud_init(
                     progress.clear()
                     print(
                         f"Connected to {name} at {target[0]}. "
-                        "Polling cloud-init status..."
+                        "Polling cloud-init status...",
+                        flush=True,
                     )
                     connected = True
 
@@ -260,10 +286,15 @@ def wait_cloud_init(
                 last_check = now
 
             if verbose:
-                try:
-                    lines = _tail_lines(name, target, OUTPUT_LOG, VERBOSE_LINES)
-                except (ssh.SshError, CloudInitError):
-                    lines = []
+                lines: list[str] = []
+                for path, count in (
+                    (OUTPUT_LOG, VERBOSE_OUTPUT_LINES),
+                    (LOG_FILE, VERBOSE_DEBUG_LINES),
+                ):
+                    try:
+                        lines.extend(_tail_lines(name, target, path, count))
+                    except (ssh.SshError, CloudInitError) as exc:
+                        lines.append(str(exc))
                 renderer.update(state, lines)
 
             if now - last_progress >= PROGRESS_INTERVAL:
@@ -276,6 +307,7 @@ def wait_cloud_init(
                 last_progress = now
 
             if state == "done":
+                # 成功时不保留 verbose 区域，清屏后只输出最终结果
                 renderer.clear()
                 progress.clear()
                 elapsed = int(time.monotonic() - started)
@@ -349,12 +381,25 @@ def cloud_init_log(
         return holder["state"] in ("done", "error")
 
     host, user, key_path = target
+    command = f"tail -n +1 -F {LOG_FILE}"
+    if _can_read(name, target, LOG_FILE):
+        pass
+    elif _can_read(name, target, LOG_FILE, sudo=True):
+        command = f"sudo -n {command}"
+    else:
+        print(
+            f"Cannot read {LOG_FILE}: permission denied "
+            "(passwordless sudo is required)",
+            file=sys.stderr,
+        )
+        return 1
+
     ssh.stream_command(
         name,
         host,
         user,
         key_path,
-        f"tail -n +1 -F {LOG_FILE}",
+        command,
         should_stop=should_stop,
     )
     return 0 if holder["state"] == "done" else 1
@@ -362,6 +407,8 @@ def cloud_init_log(
 
 def _print_log(name: str, target: tuple[str, str, Path]) -> int:
     out, err, code = _capture(name, target, f"cat {LOG_FILE}")
+    if code != 0:
+        out, err, code = _capture(name, target, f"sudo -n cat {LOG_FILE}")
     sys.stdout.write(out)
     sys.stdout.flush()
     if err:
