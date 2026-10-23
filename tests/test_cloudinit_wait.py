@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,9 @@ def _capture_key(command: str) -> str:
 
 
 def _patch_capture(monkeypatch, json_status: str, tail: str = "") -> None:
-    def fake_capture(instance, host, user, key_path, command, *, timeout=None):
+    def fake_capture(
+        _instance, _host, _user, _key_path, command, *, _timeout=None
+    ):
         key = _capture_key(command)
         if key == "json":
             return f'{{"status": "{json_status}"}}', "", 0
@@ -47,7 +50,93 @@ def _patch_capture(monkeypatch, json_status: str, tail: str = "") -> None:
 def test_wait_success_returns_zero(monkeypatch, capsys) -> None:
     _patch_capture(monkeypatch, "done")
     assert cloudinit_wait.wait_cloud_init(object(), "vm") == 0
-    assert "Cloud-init completed successfully" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Waiting for cloud-init to complete" in out
+    assert "Connected to vm at 10.0.0.5" in out
+    assert "Cloud-init completed successfully" in out
+
+
+def test_wait_prints_progress_heartbeat(monkeypatch, capsys) -> None:
+    statuses = iter(["running", "running", "done"])
+
+    def capture(_instance, _host, _user, _key_path, command, *, _timeout=None):
+        if command == cloudinit_wait.STATUS_JSON_CMD:
+            return f'{{"status": "{next(statuses)}"}}', "", 0
+        return "", "", 0
+
+    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+    clocks = iter([100.0, 100.0, 115.0, 117.0, 117.0])
+    monkeypatch.setattr(
+        cloudinit_wait.time, "monotonic", lambda: next(clocks)
+    )
+
+    assert cloudinit_wait.wait_cloud_init(object(), "vm") == 0
+    out = capsys.readouterr().out
+    assert "Cloud-init status: running (15s elapsed)" in out
+    assert "Cloud-init completed successfully in 17s." in out
+
+
+class _TtyStream(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_wait_spinner_refreshes_single_line_on_tty(monkeypatch) -> None:
+    stream = _TtyStream()
+    monkeypatch.setattr(cloudinit_wait.sys, "stdout", stream)
+    statuses = iter(["running", "running", "running", "done"])
+
+    def capture(_instance, _host, _user, _key_path, command, *, _timeout=None):
+        if command == cloudinit_wait.STATUS_JSON_CMD:
+            return f'{{"status": "{next(statuses)}"}}', "", 0
+        return "", "", 0
+
+    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+
+    clock = {"now": 100.0}
+    monkeypatch.setattr(cloudinit_wait.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        cloudinit_wait.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+
+    assert cloudinit_wait.wait_cloud_init(object(), "vm") == 0
+    out = stream.getvalue()
+    # 每一帧都带转圈字符，且全部复用同一行（无换行后接下一帧）
+    assert out.count("\r\x1b[2K") >= len(cloudinit_wait.SPINNER_FRAMES) * 3
+    assert "elapsed)\n" not in out
+    assert "Cloud-init completed successfully in" in out
+
+
+def test_wait_spinner_covers_ssh_wait(monkeypatch) -> None:
+    from kvm_cloud_init.errors import NetworkError
+
+    stream = _TtyStream()
+    monkeypatch.setattr(cloudinit_wait.sys, "stdout", stream)
+    calls = {"count": 0}
+
+    def target(_conn, _name):
+        calls["count"] += 1
+        if calls["count"] < 2:
+            raise NetworkError("no IP yet")
+        return TARGET
+
+    monkeypatch.setattr(cloudinit_wait.access, "ssh_target", target)
+    _patch_capture(monkeypatch, "done")
+
+    clock = {"now": 100.0}
+    monkeypatch.setattr(cloudinit_wait.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        cloudinit_wait.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+
+    assert cloudinit_wait.wait_cloud_init(object(), "vm") == 0
+    out = stream.getvalue()
+    assert "SSH: waiting for connection" in out
+    assert "Connected to vm at 10.0.0.5" in out
 
 
 def test_wait_error_prints_digest_and_returns_one(monkeypatch, capsys) -> None:
@@ -88,7 +177,7 @@ def test_wait_verbose_non_tty_appends_without_ansi(monkeypatch, capsys) -> None:
 def test_wait_ssh_timeout_raises_cloudinit_error(monkeypatch) -> None:
     from kvm_cloud_init.errors import NetworkError
 
-    def no_target(conn, name):
+    def no_target(_conn, _name):
         raise NetworkError("no IP")
 
     monkeypatch.setattr(cloudinit_wait.access, "ssh_target", no_target)
@@ -141,7 +230,7 @@ def test_cloud_init_log_prints_full_log(monkeypatch, capsys) -> None:
     ("state", "expected"), [("done", 0), ("error", 1)]
 )
 def test_cloud_init_log_follow_finished_does_not_hang(
-    monkeypatch, capsys, state: str, expected: int
+    monkeypatch, state: str, expected: int
 ) -> None:
     _patch_capture(monkeypatch, state)
     calls: list[str] = []
@@ -158,7 +247,9 @@ def test_cloud_init_log_follow_finished_does_not_hang(
 def test_cloud_init_log_follow_streams_until_done(monkeypatch) -> None:
     statuses = iter(["running", "done"])
 
-    def capture(instance, host, user, key_path, command, *, timeout=None):
+    def capture(
+        _instance, _host, _user, _key_path, command, *, _timeout=None
+    ):
         if command == cloudinit_wait.STATUS_JSON_CMD:
             return f'{{"status": "{next(statuses)}"}}', "", 0
         return "log\n", "", 0
@@ -172,7 +263,7 @@ def test_cloud_init_log_follow_streams_until_done(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
     def fake_stream(
-        instance, host, user, key_path, command, *, should_stop=None
+        _instance, _host, _user, _key_path, command, *, should_stop=None
     ) -> int:
         seen["command"] = command
         seen["stopped"] = should_stop() if should_stop is not None else None
