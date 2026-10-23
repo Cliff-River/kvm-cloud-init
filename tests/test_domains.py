@@ -154,7 +154,7 @@ def test_shutdown_already_off_logs_and_skips_signal() -> None:
     logs: list[str] = []
     domains.shutdown_and_wait(dom, timeout=5, log=logs.append)
     assert dom.shutdown_calls == 0
-    assert any("已处于关机状态" in line for line in logs)
+    assert any("already shut off" in line for line in logs)
 
 
 def test_shutdown_running_sends_signal_and_waits(monkeypatch) -> None:
@@ -166,8 +166,8 @@ def test_shutdown_running_sends_signal_and_waits(monkeypatch) -> None:
     domains.shutdown_and_wait(dom, timeout=5, log=logs.append)
     assert dom.shutdown_calls == 1
     assert dom.destroy_calls == 0
-    assert any("发送关机信号" in line for line in logs)
-    assert any("已关闭" in line for line in logs)
+    assert any("sending shutdown signal" in line for line in logs)
+    assert any("has shut down" in line for line in logs)
 
 
 def test_shutdown_paused_does_not_send_signal(monkeypatch) -> None:
@@ -179,7 +179,7 @@ def test_shutdown_paused_does_not_send_signal(monkeypatch) -> None:
     logs: list[str] = []
     domains.shutdown_and_wait(dom, timeout=5, log=logs.append)
     assert dom.shutdown_calls == 0
-    assert any("已关闭" in line for line in logs)
+    assert any("has shut down" in line for line in logs)
 
 
 def test_shutdown_reports_progress_every_five_seconds(monkeypatch) -> None:
@@ -190,14 +190,14 @@ def test_shutdown_reports_progress_every_five_seconds(monkeypatch) -> None:
     logs: list[str] = []
     domains.shutdown_and_wait(dom, timeout=10, force=True, log=logs.append)
     assert dom.destroy_calls == 1
-    assert any("已等待 5 秒" in line for line in logs)
-    assert any("强制断电" in line for line in logs)
+    assert any("5s elapsed" in line for line in logs)
+    assert any("forcing power off" in line for line in logs)
 
 
 def test_shutdown_timeout_without_force_raises(monkeypatch) -> None:
     _patch_clock(monkeypatch, [100.0, 105.0, 105.0, 110.0])
     dom = _FakeShutdownDomain([libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_RUNNING])
-    with pytest.raises(ShutdownTimeout, match="10 秒内未关闭"):
+    with pytest.raises(ShutdownTimeout, match="did not shut down within 10s"):
         domains.shutdown_and_wait(dom, timeout=10, force=False, log=lambda _line: None)
     assert dom.destroy_calls == 0
 
@@ -273,5 +273,42 @@ def test_destroy_domain_full_flow(monkeypatch) -> None:
     assert dom.undefine_flags == domains._UNDEFINE_FLAGS
     assert pool.refreshes == 2
     assert set(deleted) == {"/pool/vm.ov1", "/pool/vm-cidata.iso"}
-    assert any("取消定义域" in line for line in logs)
-    assert any("清理 2 个残留存储文件" in line for line in logs)
+    assert any("Undefining domain" in line for line in logs)
+    assert any("Cleaning up 2 leftover storage file(s)" in line for line in logs)
+
+
+# ---- stop_domain / 共用关机逻辑 --------------------------------------------
+
+
+def test_stop_domain_missing_returns_false() -> None:
+    conn = _FakeDestroyConn(None, _FakePool("/pool"))
+    assert domains.stop_domain(conn, "vm", 5) is False
+
+
+def test_stop_domain_delegates_to_shutdown_and_wait(monkeypatch) -> None:
+    dom = object()
+    conn = _FakeDestroyConn(dom, _FakePool("/pool"))
+    calls: list[tuple] = []
+
+    def fake_shutdown(target, timeout, force=False, log=print) -> None:
+        calls.append((target, timeout, force))
+
+    monkeypatch.setattr(domains, "shutdown_and_wait", fake_shutdown)
+
+    assert domains.stop_domain(conn, "vm", 7, force=True) is True
+    assert calls == [(dom, 7, True)]
+
+
+def test_destroy_domain_uses_shared_shutdown(monkeypatch) -> None:
+    dom = _FakeDestroyableDomain(DOMAIN_XML)
+    conn = _FakeDestroyConn(dom, _FakePool("/pool"))
+    calls: list[tuple] = []
+
+    def fake_shutdown(target, timeout, force=False, log=print) -> None:
+        calls.append((target, timeout, force))
+
+    monkeypatch.setattr(domains, "shutdown_and_wait", fake_shutdown)
+    monkeypatch.setattr(domains.storage, "delete_path", lambda *args: None)
+
+    assert domains.destroy_domain(conn, "vm", "default", 9, force=True) is True
+    assert calls == [(dom, 9, True)]

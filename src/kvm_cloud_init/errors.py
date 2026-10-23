@@ -1,4 +1,4 @@
-"""自定义异常：向 CLI 层提供可直接展示给用户的中文错误信息。"""
+"""自定义异常：向 CLI 层提供可直接展示给用户的错误信息（英文）。"""
 
 
 class KciError(Exception):
@@ -43,3 +43,7 @@ class SshError(KciError):
 
 class ProtectionDenied(ProvisionError):
     """删除保护级别阻止了销毁 / 重建（protected，或 production 未确认）。"""
+
+
+class CloudInitError(ProvisionError):
+    """cloud-init 查询、等待或日志读取失败。"""

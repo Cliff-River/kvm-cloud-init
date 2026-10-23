@@ -14,6 +14,7 @@ import sys
 import termios
 import time
 import tty
+from collections.abc import Callable
 from pathlib import Path
 
 import paramiko
@@ -72,7 +73,8 @@ def read_public_key(instance: str) -> str:
     pub = public_key_path(instance)
     if not pub.is_file():
         raise SshError(
-            f"实例 {instance} 的公钥不存在：{pub}；请先执行 kvmci create <实例名>"
+            f"Public key for instance {instance} does not exist: {pub}; "
+            "run 'kvmci create <name>' first"
         )
     return pub.read_text(encoding="utf-8").strip()
 
@@ -108,7 +110,7 @@ def _connect(instance: str, host: str, user: str, key_path: Path) -> paramiko.SS
     except (paramiko.SSHException, OSError) as exc:
         client.close()
         raise SshError(
-            f"无法连接实例 {instance}（{user}@{host}）：{exc}"
+            f"Cannot connect to instance {instance} ({user}@{host}): {exc}"
         ) from exc
     return client
 
@@ -203,3 +205,68 @@ def _drain(chan: paramiko.Channel) -> None:
             return
         if not moved:
             time.sleep(0.02)
+
+
+def capture_command(
+    instance: str,
+    host: str,
+    user: str,
+    key_path: Path,
+    command: str,
+    *,
+    timeout: float | None = None,
+) -> tuple[str, str, int]:
+    """在远端执行命令并捕获输出，返回 ``(stdout, stderr, exit_code)``。"""
+    client = _connect(instance, host, user, key_path)
+    try:
+        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        out = stdout.read().decode("utf-8", "replace")
+        err = stderr.read().decode("utf-8", "replace")
+        code = stdout.channel.recv_exit_status()
+        return out, err, code
+    finally:
+        client.close()
+
+
+def stream_command(
+    instance: str,
+    host: str,
+    user: str,
+    key_path: Path,
+    command: str,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+) -> int:
+    """流式执行远端命令，直到通道结束或 ``should_stop()`` 返回 True。
+
+    用于 ``cloud-init log -f``：输出实时转发到本地 stdout/stderr；
+    被 ``should_stop`` 提前终止时返回 0，正常结束时返回远端退出码。
+    """
+    client = _connect(instance, host, user, key_path)
+    try:
+        _stdin, stdout, _stderr = client.exec_command(command)
+        chan = stdout.channel
+        chan.setblocking(0)
+        while True:
+            moved = False
+            if chan.recv_ready():
+                sys.stdout.buffer.write(chan.recv(_BUFSIZE))
+                sys.stdout.buffer.flush()
+                moved = True
+            if chan.recv_stderr_ready():
+                sys.stderr.buffer.write(chan.recv_stderr(_BUFSIZE))
+                sys.stderr.buffer.flush()
+                moved = True
+            if should_stop is not None and should_stop():
+                chan.close()
+                return 0
+            if (
+                chan.exit_status_ready()
+                and not chan.recv_ready()
+                and not chan.recv_stderr_ready()
+            ):
+                return chan.recv_exit_status()
+            if not moved:
+                time.sleep(0.2)
+    finally:
+        client.close()

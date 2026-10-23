@@ -21,19 +21,29 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 ├── keys/                       # 每实例 SSH 密钥对（git-ignored）：<名称> / <名称>.pub
 ├── src/kvm_cloud_init/
 │   ├── __init__.py             # main() 入口
-│   ├── cli.py                  # argparse: create/destroy/list/templates/shell/exec
+│   ├── cli.py                  # argparse: create/destroy/start/stop/reboot/status/
+│   │                           #   list/templates/shell/exec/cloud-init
 │   ├── config.py               # 配置加载、校验、三级合并
 │   ├── cloudinit.py            # cloud-init 文档渲染 + 运行时公钥/用户注入
 │   ├── seediso.py              # pycdlib 生成 cidata.iso（临时目录）
 │   ├── qcow2.py                # qcow2 头 / parse_size / backing chain
-│   ├── ssh.py                  # 密钥生成/复用/删除、paramiko 连接、shell/exec
-│   ├── provision.py            # 创建/销毁/查询/连接编排
-│   ├── errors.py               # KciError 体系（中文用户信息）
+│   ├── ssh.py                  # 密钥生成/复用/删除、paramiko 连接、shell/exec、
+│   │                           #   capture_command / stream_command
+│   ├── provision/              # 业务编排包（对外由 __init__.py 导出）
+│   │   ├── __init__.py         # 统一导出公共 API
+│   │   ├── guard.py            # 删除保护级别把关、production 交互确认
+│   │   ├── create.py           # 创建/重建 + 默认等待 cloud-init
+│   │   ├── lifecycle.py        # start/stop/reboot/status/destroy
+│   │   ├── access.py           # SSH 目标解析与 shell/exec 编排
+│   │   ├── listing.py          # list / templates
+│   │   └── cloudinit_wait.py   # 等待 cloud-init、status、log [-f]
+│   ├── errors.py               # KciError 体系（英文用户信息）
 │   └── hv/                     # libvirt 交互子包（勿命名为 libvirt）
-│       ├── client.py           # qemu:///system 连接、存储池
+│       ├── client.py           # qemu:///system 连接、存储池、状态名
 │       ├── firmware.py         # UEFI 检测 + 普通 OVMF CODE/VARS 解析（域能力/描述符/文件系统）
 │       ├── storage.py          # 卷 XML / stream 上传 / 扩容 / 删除
-│       ├── domains.py          # 关机、快照、残留收集、undefine
+│       ├── domains.py          # 共享关机（shutdown_and_wait/stop_domain）、快照、
+│       │                       #   残留收集、undefine
 │       ├── network.py          # 实测 IPv4：virDomainInterfaceAddresses（lease→agent→arp）
 │       ├── osinfo.py           # os-variant -> libosinfo OS ID 解析（本机库/官方仓库）
 │       └── guest.py            # domain XML 生成 + define/start + ssh-user 元数据读写
@@ -44,13 +54,19 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 
 - 配置合并优先级：实例 > 模板 > default.conf；cloud-init 文档整块替换。
 - 删除保护字段 `level`（normal/production/protected，缺省 normal）同样三级合并；
-  destroy 与 create 的隐式销毁在 provision.py 统一把关：production 需交互输入
+  destroy 与 create 的隐式销毁在 `provision/guard.py` 统一把关：production 需交互输入
   yes（`--yes` 跳过；create 还可用 `--force`，但内部仍走优雅关机），非 TTY
   安全失败；protected 对任何标志都拒绝，只能改配置解除。未登记实例按 normal。
 - 创建：生成/复用 `keys/<名称>` 密钥对 → 渲染文档并把公钥运行时注入合并后
   `user-data`（追加到首个非 root 用户，无则新增 `cliff`）→ 临时目录生成
   cidata.iso（pycdlib）→ stream 上传镜像与 ISO 到存储池（按实例命名卷）→
-  可选卷扩容 → 构建 domain XML（含 `ssh-user` 元数据）→ define + start。
+  可选卷扩容 → 构建 domain XML（含 `ssh-user` 元数据）→ define + start →
+  默认等待 cloud-init（`--no-wait` 跳过，`--verbose` 7 行滚动）。
+- 生命周期：`start` 用 `dom.create(0)`，`stop` 与 `destroy` 共用
+  `hv/domains.shutdown_and_wait` / `stop_domain`（禁止第二套轮询）；
+  `reboot` 用 `dom.reboot(0)`；`status` 只读打印六项键值。
+- cloud-init：用 paramiko 执行 `cloud-init status --format=json`（`json.loads`），
+  `log -f` 走 `ssh.stream_command` 跟随 `/var/log/cloud-init.log`。
 - 销毁：优雅关机轮询 → 收集域/快照 XML 中外部文件并追 backing chain →
   删快照 → undefine（NVRAM/checkpoints/TPM 标志位）→ 清理残留卷与文件 →
   删除 `keys/<名称>` 与 `<名称>.pub`（保护级别未通过则不删）。
@@ -58,6 +74,7 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
   （lease→agent→arp，见 hv/network.py）→ 用 `keys/<名称>` 私钥经 paramiko
   建立交互 shell 或执行命令；exit code 透传。
 - 连接统一为 `qemu:///system`；用户需在 libvirt/kvm 组。
+- 所有面向用户的输出（help、print、警告、错误、表头、状态名）均为英文。
 
 ## 开发与验证
 
@@ -66,6 +83,11 @@ uv sync
 uv run pytest
 uv run kvmci templates
 uv run kvmci list
+uv run kvmci create <实例名> [--no-wait] [--verbose]
+uv run kvmci status <实例名>
+uv run kvmci start|stop|reboot <实例名>
+uv run kvmci cloud-init status <实例名>
+uv run kvmci cloud-init log <实例名> [-f]
 uv run kvmci shell <实例名>
 uv run kvmci exec <实例名> -- <命令>
 ```

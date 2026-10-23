@@ -13,9 +13,10 @@ from pathlib import Path
 import libvirt
 import pytest
 
-from kvm_cloud_init import provision
+from kvm_cloud_init import cloudinit, provision, ssh
 from kvm_cloud_init.config import ConfigStore
 from kvm_cloud_init.errors import ProtectionDenied, ProvisionError, SshError
+from kvm_cloud_init.hv import domains, guest, network
 
 
 class _FakeStdin:
@@ -54,13 +55,13 @@ def _record_destroy(monkeypatch) -> list[tuple[tuple, dict]]:
         recorded.append((args, kwargs))
         return True
 
-    monkeypatch.setattr(provision.domains, "destroy_domain", fake_destroy)
+    monkeypatch.setattr(domains, "destroy_domain", fake_destroy)
     return recorded
 
 
 def _existing_domain(monkeypatch) -> None:
     monkeypatch.setattr(
-        provision.domains, "lookup_domain", lambda conn, name: object()
+        domains, "lookup_domain", lambda conn, name: object()
     )
 
 
@@ -68,61 +69,61 @@ def _existing_domain(monkeypatch) -> None:
 
 
 def test_guard_normal_always_allowed() -> None:
-    provision._ensure_destroy_allowed(
-        "x", "normal", skip_confirm=False, action="销毁"
+    provision.ensure_destroy_allowed(
+        "x", "normal", skip_confirm=False, action="destroy"
     )
 
 
 @pytest.mark.parametrize("skip_confirm", [False, True])
 def test_guard_protected_always_denied(skip_confirm: bool) -> None:
     with pytest.raises(ProtectionDenied, match="protected"):
-        provision._ensure_destroy_allowed(
-            "x", "protected", skip_confirm=skip_confirm, action="销毁"
+        provision.ensure_destroy_allowed(
+            "x", "protected", skip_confirm=skip_confirm, action="destroy"
         )
 
 
 def test_guard_production_accepts_yes(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin("yes\n"))
-    provision._ensure_destroy_allowed(
-        "x", "production", skip_confirm=False, action="销毁"
+    provision.ensure_destroy_allowed(
+        "x", "production", skip_confirm=False, action="destroy"
     )
 
 
 def test_guard_production_accepts_yes_with_surrounding_space(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin("  yes  \n"))
-    provision._ensure_destroy_allowed(
-        "x", "production", skip_confirm=False, action="销毁"
+    provision.ensure_destroy_allowed(
+        "x", "production", skip_confirm=False, action="destroy"
     )
 
 
 def test_guard_production_rejects_wrong_answer(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin("no\n"))
     with pytest.raises(ProtectionDenied, match="yes"):
-        provision._ensure_destroy_allowed(
-            "x", "production", skip_confirm=False, action="销毁"
+        provision.ensure_destroy_allowed(
+            "x", "production", skip_confirm=False, action="destroy"
         )
 
 
 def test_guard_production_rejects_eof(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin("", tty=True))
     with pytest.raises(ProtectionDenied):
-        provision._ensure_destroy_allowed(
-            "x", "production", skip_confirm=False, action="销毁"
+        provision.ensure_destroy_allowed(
+            "x", "production", skip_confirm=False, action="destroy"
         )
 
 
 def test_guard_production_rejects_non_tty_even_piped_yes(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin("yes\n", tty=False))
-    with pytest.raises(ProtectionDenied, match="非交互"):
-        provision._ensure_destroy_allowed(
-            "x", "production", skip_confirm=False, action="销毁"
+    with pytest.raises(ProtectionDenied, match="non-interactive"):
+        provision.ensure_destroy_allowed(
+            "x", "production", skip_confirm=False, action="destroy"
         )
 
 
 def test_guard_production_skip_confirm_on_non_tty(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin("yes\n", tty=False))
-    provision._ensure_destroy_allowed(
-        "x", "production", skip_confirm=True, action="销毁"
+    provision.ensure_destroy_allowed(
+        "x", "production", skip_confirm=True, action="destroy"
     )
 
 
@@ -144,7 +145,7 @@ def test_destroy_protected_yes_still_denied(level_store, monkeypatch) -> None:
 
 def test_destroy_production_non_tty_denied(level_store, monkeypatch) -> None:
     recorded = _record_destroy(monkeypatch)
-    with pytest.raises(ProtectionDenied, match="非交互"):
+    with pytest.raises(ProtectionDenied, match="non-interactive"):
         provision.destroy_instance(level_store, object(), "prod")
     assert recorded == []
 
@@ -182,7 +183,7 @@ def _proceed_after_destroy(monkeypatch, recorded) -> None:
     def fail_later(*args, **kwargs) -> Callable:
         raise _Proceeded
 
-    monkeypatch.setattr(provision.cloudinit, "render_docs", fail_later)
+    monkeypatch.setattr(cloudinit, "render_docs", fail_later)
 
 
 def test_create_protected_existing_domain_denied(level_store, monkeypatch) -> None:
@@ -210,7 +211,7 @@ def test_create_protected_yes_still_denied(level_store, monkeypatch) -> None:
 def test_create_production_non_tty_denied(level_store, monkeypatch) -> None:
     _existing_domain(monkeypatch)
     recorded = _record_destroy(monkeypatch)
-    with pytest.raises(ProtectionDenied, match="非交互"):
+    with pytest.raises(ProtectionDenied, match="non-interactive"):
         provision.create_instance(level_store, object(), "prod")
     assert recorded == []
 
@@ -252,13 +253,13 @@ def test_create_protected_without_existing_domain_allowed(
 ) -> None:
     # 无同名域时不存在销毁动作，protected 不影响新建
     monkeypatch.setattr(
-        provision.domains, "lookup_domain", lambda conn, name: None
+        domains, "lookup_domain", lambda conn, name: None
     )
 
     def fail_later(*args, **kwargs):
         raise _Proceeded
 
-    monkeypatch.setattr(provision.cloudinit, "render_docs", fail_later)
+    monkeypatch.setattr(cloudinit, "render_docs", fail_later)
     with pytest.raises(_Proceeded):
         provision.create_instance(level_store, object(), "crit")
 
@@ -273,7 +274,7 @@ def _record_key_deletion(monkeypatch) -> list[str]:
         deleted.append(name)
         return []
 
-    monkeypatch.setattr(provision.ssh, "delete_keypair", fake_delete)
+    monkeypatch.setattr(ssh, "delete_keypair", fake_delete)
     return deleted
 
 
@@ -297,9 +298,9 @@ def test_destroy_key_deletion_failure_does_not_block(level_store, monkeypatch, c
     def explode(name: str) -> list:
         raise OSError("权限不足")
 
-    monkeypatch.setattr(provision.ssh, "delete_keypair", explode)
+    monkeypatch.setattr(ssh, "delete_keypair", explode)
     assert provision.destroy_instance(level_store, object(), "plain") is True
-    assert "警告" in capsys.readouterr().out
+    assert "Warning" in capsys.readouterr().out
 
 
 def test_create_rebuild_does_not_delete_keypair(level_store, monkeypatch) -> None:
@@ -322,15 +323,15 @@ class _RunningDom:
 
 def _prepare_ssh_target(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(
-        provision.domains, "lookup_domain", lambda conn, name: _RunningDom()
+        domains, "lookup_domain", lambda conn, name: _RunningDom()
     )
-    monkeypatch.setattr(provision.guest, "domain_ssh_user", lambda dom: "cliff")
+    monkeypatch.setattr(guest, "domain_ssh_user", lambda dom: "cliff")
     monkeypatch.setattr(
-        provision.network, "find_ipv4", lambda conn, name: "10.0.0.5"
+        network, "find_ipv4", lambda conn, name: "10.0.0.5"
     )
     key = tmp_path / "plain"
     key.write_text("private")
-    monkeypatch.setattr(provision.ssh, "private_key_path", lambda name: key)
+    monkeypatch.setattr(ssh, "private_key_path", lambda name: key)
     return key
 
 
@@ -342,7 +343,7 @@ def test_shell_instance_passes_target(level_store, monkeypatch, tmp_path) -> Non
         captured.update(instance=instance, host=host, user=user, key=key_path)
         return 0
 
-    monkeypatch.setattr(provision.ssh, "interactive_shell", fake_shell)
+    monkeypatch.setattr(ssh, "interactive_shell", fake_shell)
     assert provision.shell_instance(level_store, object(), "plain") == 0
     assert captured == {"instance": "plain", "host": "10.0.0.5", "user": "cliff", "key": key}
 
@@ -355,7 +356,7 @@ def test_exec_instance_joins_command(level_store, monkeypatch, tmp_path) -> None
         captured.update(host=host, user=user, command=command)
         return 7
 
-    monkeypatch.setattr(provision.ssh, "run_command", fake_run)
+    monkeypatch.setattr(ssh, "run_command", fake_run)
     rc = provision.exec_instance(level_store, object(), "plain", ["ls", "-l", "/"])
     assert rc == 7
     assert captured == {"host": "10.0.0.5", "user": "cliff", "command": "ls -l /"}
@@ -363,23 +364,23 @@ def test_exec_instance_joins_command(level_store, monkeypatch, tmp_path) -> None
 
 def test_shell_instance_requires_running_domain(level_store, monkeypatch) -> None:
     monkeypatch.setattr(
-        provision.domains, "lookup_domain", lambda conn, name: None
+        domains, "lookup_domain", lambda conn, name: None
     )
-    with pytest.raises(ProvisionError, match="不存在"):
+    with pytest.raises(ProvisionError, match="does not exist"):
         provision.shell_instance(level_store, object(), "ghost")
 
 
 def test_shell_instance_requires_recorded_user(level_store, monkeypatch, tmp_path) -> None:
     _prepare_ssh_target(monkeypatch, tmp_path)
-    monkeypatch.setattr(provision.guest, "domain_ssh_user", lambda dom: None)
-    with pytest.raises(SshError, match="登录用户"):
+    monkeypatch.setattr(guest, "domain_ssh_user", lambda dom: None)
+    with pytest.raises(SshError, match="SSH login user"):
         provision.shell_instance(level_store, object(), "plain")
 
 
 def test_shell_instance_requires_private_key(level_store, monkeypatch, tmp_path) -> None:
     _prepare_ssh_target(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        provision.ssh, "private_key_path", lambda name: tmp_path / "missing"
+        ssh, "private_key_path", lambda name: tmp_path / "missing"
     )
-    with pytest.raises(SshError, match="私钥不存在"):
+    with pytest.raises(SshError, match="Private key"):
         provision.shell_instance(level_store, object(), "plain")

@@ -8,6 +8,7 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 ## 架构边界（不要越层）
 
 - `cli.py`：只做 argparse 参数解析、表格输出与异常到退出码的转换，不写业务逻辑。
+  子命令：create/destroy/start/stop/reboot/status/list/templates/shell/exec/cloud-init。
 - `config.py`：三份 YAML 配置（default/templates/instances）的加载、校验、
   三级合并（实例 > 模板 > 默认值）。
 - `cloudinit.py`：cloud-init 三份文档的渲染（实例内联 > 模板内联 > path 目录文件）；
@@ -15,14 +16,18 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 - `seediso.py`：临时目录 + pycdlib 生成卷标 `cidata` 的 ISO。
 - `qcow2.py`：qcow2 头解析、容量单位、backing chain（纯标准库）。
 - `ssh.py`：每实例密钥对（`keys/<实例名>`/`.pub`）的生成/复用/删除、
-  paramiko 连接、交互 shell 与一次性 exec（不调用 `ssh`/`ssh-keygen` 子进程）。
-- `hv/`：所有 libvirt 交互。`client`（连接/存储池）、`firmware`（UEFI 检测）、
-  `storage`（卷上传/扩容/删除）、`domains`（关机/快照/undefine）、
-  `network`（实测 IPv4：`virDomainInterfaceAddresses` lease→agent→arp）、
+  paramiko 连接、交互 shell 与一次性 exec（不调用 `ssh`/`ssh-keygen` 子进程）；
+  另有 `capture_command`（捕获输出）与 `stream_command`（流式跟随）供 cloud-init 使用。
+- `hv/`：所有 libvirt 交互。`client`（连接/存储池/状态名）、`firmware`（UEFI 检测）、
+  `storage`（卷上传/扩容/删除）、`domains`（共享关机 `shutdown_and_wait`/`stop_domain`、
+  快照/undefine）、`network`（实测 IPv4：`virDomainInterfaceAddresses` lease→agent→arp）、
   `osinfo`（os-variant 到 libosinfo OS ID 的解析：本机 osinfo-db > 官方 GitLab 仓库 > 内置兜底）、
   `guest`（domain XML 生成与启动，含 `ssh-user` 元数据读写）。
-- `provision.py`：编排以上模块完成 create/destroy/list/templates/shell/exec。
-- `errors.py`：所有面向用户的异常，message 必须是可直接展示的中文。
+- `provision/`：业务编排包，按职责拆分：`guard`（保护级别）、`create`（创建 + 等待）、
+  `lifecycle`（start/stop/reboot/status/destroy）、`access`（shell/exec）、
+  `listing`（list/templates）、`cloudinit_wait`（等待/status/log）；公共 API 由
+  `__init__.py` 导出。
+- `errors.py`：所有面向用户的异常，message 必须是可直接展示的英文。
 
 ## 硬性约定
 
@@ -38,13 +43,21 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
    production 在 destroy/create 隐式销毁前需交互输入 yes（`--yes` 跳过，
    create 的 `--force` 等价跳过，内部仍优雅关机），非 TTY 必须安全失败；
    protected 对 `--yes`/`--force` 一律拒绝，只能改配置解除；把关逻辑在
-   provision.py，拒绝时抛 errors.ProtectionDenied，未登记实例按 normal。
+   `provision/guard.py`，拒绝时抛 errors.ProtectionDenied，未登记实例按 normal。
 8. SSH 用 paramiko（Ed25519 优先，无 `generate` 时回退 RSA-3072），
    禁止 subprocess 调用 `ssh`/`ssh-keygen`；密钥存于 git-ignored 的
    `keys/<实例名>`(`.pub`)，私钥 0600、公钥 0644，连接只用程序私钥、
    不做密码回退；登录用户记录在 domain 元数据 `ssh-user`。
 9. destroy 在保护级别校验通过后同步删除 `keys/<实例名>` 与 `.pub`
    （缺失跳过，删除失败仅告警不阻断）；create 的隐式销毁不删密钥。
+10. create 在 define + start 后默认等待 cloud-init（`--no-wait` 跳过）；
+    等待经 SSH + `cloud-init status --format=json`（`json.loads`）轮询，
+    IP/SSH 每 2 秒重试、最长 300 秒；失败打印摘要与日志尾部并退出 1，
+    Ctrl+C 停止等待但实例保持运行。`--verbose` 固定 7 行滚动，非 TTY 降级为追加输出。
+11. `stop` 与 `destroy` 共用 `hv/domains.shutdown_and_wait` / `stop_domain`，
+    禁止第二套关机轮询；`stop --force` 不跳过优雅关机，仅超时后强制断电。
+12. 所有面向用户的输出（argparse help、print、警告、异常、表头、状态名）用英文；
+    代码注释与 docstring 可保持中文。
 
 ## 常用命令
 
@@ -53,7 +66,11 @@ uv sync                  # 安装依赖
 uv run pytest            # 单元测试（无需 root/KVM）
 uv run kvmci templates
 uv run kvmci list
-uv run kvmci create <实例名> [--template 模板] [--yes] [--force]
+uv run kvmci create <实例名> [--template 模板] [--yes] [--force] [--no-wait] [--verbose]
+uv run kvmci start|stop|reboot <实例名> [--force]
+uv run kvmci status <实例名>
+uv run kvmci cloud-init status <实例名>
+uv run kvmci cloud-init log <实例名> [-f]
 uv run kvmci shell <实例名>
 uv run kvmci exec <实例名> -- <命令>
 uv run kvmci destroy <实例名> [--force] [--yes]

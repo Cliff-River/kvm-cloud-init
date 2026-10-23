@@ -52,7 +52,7 @@ def test_generated_private_key_is_loadable(keys_root: Path) -> None:
 
 
 def test_read_public_key_missing(keys_root: Path) -> None:
-    with pytest.raises(SshError, match="公钥不存在"):
+    with pytest.raises(SshError, match="Public key"):
         ssh.read_public_key("ghost")
 
 
