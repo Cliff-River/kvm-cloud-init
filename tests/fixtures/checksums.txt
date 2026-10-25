@@ -1,0 +1,5 @@
+# 注释行应被忽略
+# SHA256 (Rocky-10-GenericCloud-LVM-10.2-20260525.0.x86_64.qcow2) = 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+SHA256 (Rocky-9-GenericCloud-LVM-9.8-20260525.0.x86_64.qcow2) = fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  *debian-13-generic-amd64.qcow2
+

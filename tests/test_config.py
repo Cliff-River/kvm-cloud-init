@@ -30,7 +30,7 @@ def test_merge_instance_over_template_over_defaults(store: ConfigStore) -> None:
     assert i2.capacity == "50G"       # 模板值
     assert i2.graphics == "spice"     # 模板覆盖默认
     assert i2.video == "virtio"
-    assert i2.template.image == "u.qcow2"
+    assert i2.template.image == "ubuntu"
 
     i3 = store.resolve("i3")
     assert i3.memory == 1024          # 默认
@@ -135,8 +135,8 @@ def test_level_three_way_merge(project_dir) -> None:
         "shutdown_timeout: 5\n"
     )
     (project_dir / "templates.conf").write_text(
-        "t1:\n  path: templates/t1\n  image: base.qcow2\n  level: protected\n"
-        "t2:\n  path: templates/t2\n  image: u.qcow2\n"
+        "t1:\n  path: templates/t1\n  image: base\n  level: protected\n"
+        "t2:\n  path: templates/t2\n  image: ubuntu\n"
     )
     (project_dir / "instances.conf").write_text(
         # 实例/模板都没设 -> default.conf 的 production
@@ -182,3 +182,83 @@ def test_bad_level_rejected(project_dir, filename: str, body: str, match: str) -
     (project_dir / filename).write_text(body)
     with pytest.raises(ConfigError, match=match):
         ConfigStore.load(project_dir)
+
+
+# ---- 镜像目录（images.conf / images.user.conf） ----
+
+
+def test_missing_images_conf_is_generated(project_dir) -> None:
+    (project_dir / "templates.conf").write_text(
+        "t:\n  path: templates/t1\n  image: almalinux-10\n"
+    )
+    (project_dir / "instances.conf").write_text("")
+    (project_dir / "images.conf").unlink()
+    store = ConfigStore.load(project_dir)
+    assert (project_dir / "images.conf").exists()
+    assert "almalinux-10" in store.images
+    assert store.images["rocky-10-lvm"].origin == "system"
+
+
+def test_user_images_new_and_override(project_dir) -> None:
+    (project_dir / "images.user.conf").write_text(
+        "internal:\n"
+        "  file: internal.qcow2\n"
+        "  kind: url\n"
+        "  urls: [https://internal/internal.qcow2]\n"
+        "  checksum_url: https://internal/internals.qcow2.sha256\n"
+        "base:\n"
+        "  file: base-alt.qcow2\n"
+        "  kind: url\n"
+        "  urls: [https://internal/base.qcow2]\n"
+        "  checksum_url: https://internal/base.qcow2.sha256\n"
+    )
+    store = ConfigStore.load(project_dir)
+    assert store.images["internal"].origin == "user"
+    assert store.images["base"].origin == "user(override)"
+    assert store.image_path("base").name == "base-alt.qcow2"
+
+
+def test_template_image_id_must_exist(project_dir) -> None:
+    (project_dir / "templates.conf").write_text(
+        "bad:\n  path: templates/t1\n  image: ghost\n"
+    )
+    (project_dir / "instances.conf").write_text("")
+    with pytest.raises(ConfigError, match="references image ghost"):
+        ConfigStore.load(project_dir)
+
+
+def test_template_image_dir_rejected(project_dir) -> None:
+    (project_dir / "templates.conf").write_text(
+        "bad:\n  path: templates/t1\n  image: base\n  image_dir: images\n"
+    )
+    with pytest.raises(ConfigError, match="Unknown fields.*image_dir"):
+        ConfigStore.load(project_dir)
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        ("bad:\n  kind: url\n", "missing required field file"),
+        ("bad:\n  file: b.qcow2\n  kind: weird\n", "field kind"),
+        ("bad:\n  file: b.qcow2\n  kind: url\n  urls: []\n  checksum_url: https://x/b.sha256\n", "non-empty list"),
+        ("bad:\n  file: b.qcow2\n  kind: index\n  pages: [https://x/]\n  match: '['\n  checksum_file: CHECKSUM\n", "not a valid regular expression"),
+        ("bad:\n  file: b.qcow2\n  kind: url\n  urls: [https://x/b.qcow2]\n  checksum_url: https://x/b.sha256\n  checksum_algo: md5\n", "checksum_algo"),
+        ("bad:\n  file: b.qcow2\n  kind: url\n  urls: [https://x/b.qcow2]\n", "no checksum source"),
+        ("base2:\n  file: base.qcow2\n  kind: url\n  urls: [https://x/base.qcow2]\n  checksum_url: https://x/base.sha256\n", "must be unique"),
+        ("base:\n  file: base.qcow2\n  kind: url\n  urls: [https://x/base.qcow2]\n  checksum_url: https://x/base.sha256\n  insecure: maybe\n", "must be a boolean"),
+    ],
+)
+def test_image_source_validation(project_dir, body: str, match: str) -> None:
+    (project_dir / "images.user.conf").write_text(body)
+    with pytest.raises(ConfigError, match=match):
+        ConfigStore.load(project_dir)
+
+
+def test_bad_image_policy(project_dir) -> None:
+    (project_dir / "default.conf").write_text("image_policy: offline\n")
+    with pytest.raises(ConfigError, match="image_policy"):
+        ConfigStore.load(project_dir)
+
+
+def test_image_policy_defaults_to_auto(store: ConfigStore) -> None:
+    assert store.defaults.image_policy == "auto"

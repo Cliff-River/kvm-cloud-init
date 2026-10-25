@@ -8,12 +8,12 @@ import libvirt
 
 from .. import cloudinit, qcow2, seediso, ssh
 from ..config import ConfigStore
-from ..errors import ImageNotFound
 from ..hv import client, domains, firmware, guest
 from ..hv import storage as hv_storage
 from ..hv.client import pool_target_path
 from .cloudinit_wait import wait_cloud_init
 from .guard import ensure_destroy_allowed
+from .images import ensure_image, progress_printer
 
 DISK_SUFFIX = ".qcow2"
 SEED_SUFFIX = "-cidata.iso"
@@ -36,19 +36,22 @@ def create_instance(
     force: bool = False,
     no_wait: bool = False,
     verbose: bool = False,
+    local: bool = False,
 ) -> int:
     """幂等创建实例：同名域存在时先销毁再创建，默认等待 cloud-init。
 
     ``yes`` / ``force`` 均可跳过 production 级别的交互确认；
     protected 级别在任何情况下都拒绝隐式销毁。
+    ``local`` 强制本次创建只使用本地镜像（绝不触网）。
     返回进程退出码：cloud-init 等待失败时为 1，否则为 0。
     """
     resolved = store.resolve(name, template_name)
-    if not resolved.image_path.is_file():
-        raise ImageNotFound(
-            f"Source image does not exist: {resolved.image_path} "
-            f"(image of template {resolved.template.name})"
-        )
+    ensure_image(
+        store,
+        resolved.image_id,
+        policy="local" if local else None,
+        progress=progress_printer(resolved.image_id),
+    )
 
     # 同名实例先销毁（优雅关机，不强制；失败时提示用户）
     if domains.lookup_domain(conn, name) is not None:

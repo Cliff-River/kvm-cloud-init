@@ -42,7 +42,7 @@ def test_missing_required_doc(project_dir) -> None:
         """\
 empty:
   path: templates/ghost
-  image: base.qcow2
+  image: base
 """
     )
     store = ConfigStore.load(project_dir)

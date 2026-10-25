@@ -23,13 +23,12 @@ shutdown_timeout: 5
 _TEMPLATES_CONF = """\
 t1:
   path: templates/t1
-  image_dir: images
-  image: base.qcow2
+  image: base
   os_variant: rocky10
 
 t2:
   path: templates/t2
-  image: u.qcow2
+  image: ubuntu
   os_variant: ubuntu26.04
   memory: 4096
   capacity: 50G
@@ -40,13 +39,36 @@ t2:
     template_inline: true
 
 t3:
-  image: x.qcow2
+  image: misc
   user-data: |
     #cloud-config
     fully_inline: true
   meta-data: |
     instance-id: t3
     local-hostname: t3
+"""
+
+_IMAGES_CONF = """\
+base:
+  file: base.qcow2
+  kind: url
+  urls:
+    - https://example.invalid/base.qcow2
+  checksum_url: https://example.invalid/base.qcow2.sha256
+
+ubuntu:
+  file: u.qcow2
+  kind: url
+  urls:
+    - https://example.invalid/u.qcow2
+  checksum_url: https://example.invalid/u.qcow2.sha256
+
+misc:
+  file: x.qcow2
+  kind: url
+  urls:
+    - https://example.invalid/x.qcow2
+  checksum_url: https://example.invalid/x.qcow2.sha256
 """
 
 _INSTANCES_CONF = """\
@@ -102,6 +124,7 @@ def project_dir(tmp_path: Path) -> Path:
     (tmp_path / "templates/t2/meta-data").write_text("instance-id: t2\n")
 
     (tmp_path / "default.conf").write_text(_DEFAULT_CONF)
+    (tmp_path / "images.conf").write_text(_IMAGES_CONF)
     (tmp_path / "templates.conf").write_text(_TEMPLATES_CONF)
     (tmp_path / "instances.conf").write_text(_INSTANCES_CONF)
     return tmp_path

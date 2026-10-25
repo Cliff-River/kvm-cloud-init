@@ -21,6 +21,10 @@ class ImageNotFound(KciError):
     """本地源 qcow2 镜像文件不存在。"""
 
 
+class ImageFetchError(KciError):
+    """镜像目录解析、下载或校验和验证失败。"""
+
+
 class LibvirtConnectionError(KciError):
     """无法连接 qemu:///system。"""
 

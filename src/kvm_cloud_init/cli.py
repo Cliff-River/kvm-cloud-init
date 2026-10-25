@@ -8,7 +8,7 @@ import sys
 import libvirt
 
 from . import provision
-from .config import ConfigStore
+from .config import ConfigStore, project_root
 from .errors import KciError
 from .hv.client import connect
 
@@ -50,6 +50,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="while waiting, stream cloud-init output in a 7-line rolling area",
     )
+    create.add_argument(
+        "--local",
+        action="store_true",
+        help="use only the local source image; never download (fails if missing)",
+    )
 
     destroy = sub.add_parser("destroy", help="destroy an instance")
     destroy.add_argument("name", help=_NAME_HELP)
@@ -84,6 +89,58 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list", help="list configured instances and libvirt domain states")
     sub.add_parser("templates", help="list templates defined in templates.conf")
+
+    images = sub.add_parser(
+        "images", help="manage the cloud image catalog (init/refresh/list/check/pull)"
+    )
+    images_sub = images.add_subparsers(dest="images_command", required=True)
+    images_init = images_sub.add_parser(
+        "init", help="generate images.conf from the built-in preset catalog"
+    )
+    images_init.add_argument(
+        "--force", action="store_true", help="overwrite an existing images.conf"
+    )
+    images_refresh = images_sub.add_parser(
+        "refresh", help="rebuild images.conf and probe upstream versions"
+    )
+    images_refresh.add_argument(
+        "--include-archived",
+        action="store_true",
+        help="also probe end-of-life (archived) entries",
+    )
+    images_sub.add_parser("list", help="list catalog images and local state (offline)")
+    images_check = images_sub.add_parser(
+        "check", help="probe upstream versions without downloading"
+    )
+    images_check.add_argument(
+        "ids",
+        nargs="*",
+        metavar="id",
+        help="image IDs or template names (default: images referenced by templates)",
+    )
+    images_check.add_argument(
+        "--all", action="store_true", help="check every non-archived catalog entry"
+    )
+    images_check.add_argument(
+        "--include-archived",
+        action="store_true",
+        help="include end-of-life (archived) entries in --all",
+    )
+    images_pull = images_sub.add_parser("pull", help="download or update images")
+    images_pull.add_argument(
+        "ids",
+        nargs="*",
+        metavar="id",
+        help="image IDs or template names",
+    )
+    images_pull.add_argument(
+        "--all",
+        action="store_true",
+        help="pull every image referenced by templates.conf (deduplicated)",
+    )
+    images_pull.add_argument(
+        "--force", action="store_true", help="re-download even if up to date"
+    )
 
     shell = sub.add_parser("shell", help="open an interactive SSH session")
     shell.add_argument("name", help=_NAME_HELP)
@@ -136,14 +193,53 @@ def _pad(value: object, width: int) -> str:
     return text + " " * (width - _display_width(text))
 
 
+def _run_images(args: argparse.Namespace) -> int:
+    """images 子命令调度：init/refresh 只依赖项目根目录，不加载实例配置。"""
+    root = project_root()
+    command = args.images_command
+    if command == "init":
+        return provision.init_catalog(root, force=args.force)
+    if command == "refresh":
+        return provision.refresh_catalog(
+            root, include_archived=args.include_archived
+        )
+
+    store = ConfigStore.load(root)
+    if command == "list":
+        _print_table(
+            ("Image ID", "Origin", "Local", "Kind", "Catalog ver.", "Local ver."),
+            provision.list_images(store),
+        )
+        return 0
+    if command == "check":
+        return provision.check_images(
+            store,
+            list(args.ids),
+            all_entries=args.all,
+            include_archived=args.include_archived,
+        )
+    if not args.ids and not args.all:
+        print(
+            "Error: images pull requires at least one image ID or --all",
+            file=sys.stderr,
+        )
+        return 2
+    return provision.pull_images(
+        store, list(args.ids), all_templates=args.all, force=args.force
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
+        if args.command == "images":
+            return _run_images(args)
+
         store = ConfigStore.load()
 
         if args.command == "templates":
             rows = provision.list_templates(store)
-            _print_table(("Template", "Image", "os_variant"), rows)
+            _print_table(("Template", "Image ID", "os_variant"), rows)
             return 0
 
         conn = connect()
@@ -158,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
                 force=args.force,
                 no_wait=args.no_wait,
                 verbose=args.verbose,
+                local=args.local,
             )
         if args.command == "destroy":
             provision.destroy_instance(

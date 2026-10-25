@@ -30,6 +30,7 @@ def test_create_dispatch(monkeypatch) -> None:
         force=False,
         no_wait=False,
         verbose=False,
+        local=False,
     ):
         calls.update(
             name=name,
@@ -38,6 +39,7 @@ def test_create_dispatch(monkeypatch) -> None:
             force=force,
             no_wait=no_wait,
             verbose=verbose,
+            local=local,
         )
         return 0
 
@@ -52,6 +54,7 @@ def test_create_dispatch(monkeypatch) -> None:
         "force": False,
         "no_wait": False,
         "verbose": False,
+        "local": False,
     }
 
     assert cli.main(["create", "adhoc", "--template", "Debian"]) == 0
@@ -62,6 +65,7 @@ def test_create_dispatch(monkeypatch) -> None:
         "force": False,
         "no_wait": False,
         "verbose": False,
+        "local": False,
     }
 
 
@@ -77,6 +81,7 @@ def test_create_wait_flags_dispatch(monkeypatch) -> None:
         force=False,
         no_wait=False,
         verbose=False,
+        local=False,
     ):
         calls.update(no_wait=no_wait, verbose=verbose)
         return 0
@@ -111,6 +116,7 @@ def test_create_yes_and_force_dispatch(monkeypatch) -> None:
         force=False,
         no_wait=False,
         verbose=False,
+        local=False,
     ):
         calls.update(yes=yes, force=force)
         return 0
@@ -300,3 +306,73 @@ def test_cloud_init_requires_subcommand() -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main(["cloud-init"])
     assert exc.value.code == 2
+
+
+# ---- images 子命令 ----
+
+
+@pytest.fixture
+def use_project(project_dir, monkeypatch):
+    """把 images 子命令的项目根指向临时项目，避免读取真实仓库配置。"""
+    monkeypatch.setattr(cli, "project_root", lambda: project_dir)
+    return project_dir
+
+
+def test_images_list_does_not_connect(use_project, monkeypatch, capsys) -> None:
+    def fail() -> object:
+        raise AssertionError("images must not connect to libvirt")
+
+    monkeypatch.setattr(cli, "connect", fail)
+    assert cli.main(["images", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "Image ID" in out
+    assert "base" in out
+
+
+def test_images_init_existing_and_force(use_project, capsys) -> None:
+    assert cli.main(["images", "init"]) == 1
+    assert "already exists" in capsys.readouterr().err
+
+    assert cli.main(["images", "init", "--force"]) == 0
+    assert "Generated image catalog" in capsys.readouterr().out
+
+
+def test_images_refresh_dispatch(use_project, monkeypatch) -> None:
+    calls = {}
+
+    def fake_refresh(root, *, include_archived=False):
+        calls.update(root=root, include_archived=include_archived)
+        return 0
+
+    monkeypatch.setattr(cli.provision, "refresh_catalog", fake_refresh)
+    assert cli.main(["images", "refresh", "--include-archived"]) == 0
+    assert calls == {"root": use_project, "include_archived": True}
+
+
+def test_images_check_dispatch(use_project, monkeypatch) -> None:
+    calls = {}
+
+    def fake_check(store, tokens, *, all_entries=False, include_archived=False):
+        calls.update(tokens=tokens, all_entries=all_entries)
+        return 1
+
+    monkeypatch.setattr(cli.provision, "check_images", fake_check)
+    assert cli.main(["images", "check", "base", "t2", "--include-archived"]) == 1
+    assert calls == {"tokens": ["base", "t2"], "all_entries": False}
+
+
+def test_images_pull_requires_ids_or_all(use_project, capsys) -> None:
+    assert cli.main(["images", "pull"]) == 2
+    assert "image ID or --all" in capsys.readouterr().err
+
+
+def test_images_pull_dispatch(use_project, monkeypatch) -> None:
+    calls = {}
+
+    def fake_pull(store, tokens, *, all_templates=False, force=False):
+        calls.update(tokens=tokens, all_templates=all_templates, force=force)
+        return 0
+
+    monkeypatch.setattr(cli.provision, "pull_images", fake_pull)
+    assert cli.main(["images", "pull", "--all", "--force"]) == 0
+    assert calls == {"tokens": [], "all_templates": True, "force": True}

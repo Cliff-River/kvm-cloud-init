@@ -13,17 +13,21 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 ```
 ├── pyproject.toml              # uv 项目；console script: kvmci
 ├── default.conf                # 全局默认值（YAML）
+├── images.conf                 # 系统生成的镜像目录（git-ignored，勿手改）
+├── images.user.conf            # 用户镜像目录（同名条目整条覆盖系统定义）
 ├── templates.conf              # OS 模板定义（YAML）
 ├── instances.conf              # 实例定义（YAML）
 ├── templates/<名称>/            # cloud-init 三件套：
 │                               #   meta-data / network-config / user-data
-├── images/                     # 源 qcow2 镜像（git-ignored）
+├── images/                     # 源 qcow2 镜像 + .state.json 下载状态（git-ignored）
 ├── keys/                       # 每实例 SSH 密钥对（git-ignored）：<名称> / <名称>.pub
 ├── src/kvm_cloud_init/
-│   ├── __init__.py             # main() 入口
+│   ├── __init__.py             # __version__ + main() 入口
 │   ├── cli.py                  # argparse: create/destroy/start/stop/reboot/status/
-│   │                           #   list/templates/shell/exec/cloud-init
-│   ├── config.py               # 配置加载、校验、三级合并
+│   │                           #   list/templates/shell/exec/cloud-init/images
+│   ├── config.py               # 配置加载、校验、三级合并、镜像目录合并
+│   ├── catalog.py              # 内置镜像预设 + 确定性渲染 images.conf
+│   ├── imagefetch.py           # 目录页解析、校验和、流式下载、.state.json
 │   ├── cloudinit.py            # cloud-init 文档渲染 + 运行时公钥/用户注入
 │   ├── seediso.py              # pycdlib 生成 cidata.iso（临时目录）
 │   ├── qcow2.py                # qcow2 头 / parse_size / backing chain
@@ -36,6 +40,7 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 │   │   ├── lifecycle.py        # start/stop/reboot/status/destroy
 │   │   ├── access.py           # SSH 目标解析与 shell/exec 编排
 │   │   ├── listing.py          # list / templates
+│   │   ├── images.py           # images init/refresh/list/check/pull + ensure_image
 │   │   └── cloudinit_wait.py   # 等待 cloud-init、status、log [-f]
 │   ├── errors.py               # KciError 体系（英文用户信息）
 │   └── hv/                     # libvirt 交互子包（勿命名为 libvirt）
@@ -53,6 +58,17 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 ## 工作方式
 
 - 配置合并优先级：实例 > 模板 > default.conf；cloud-init 文档整块替换。
+- 镜像三层来源合并为一张注册表：内置 `catalog.PRESET` → 系统 `images.conf`
+  （缺失时自动确定性渲染、git-ignored、勿手改）→ 用户 `images.user.conf`
+  （永不改写，同名键整条覆盖）。`templates.conf` 的 `image` 是镜像 ID，
+  不再有 `image_dir`（本地目录只由 `default.conf` 的 `image_dir` 决定）。
+- 镜像获取：`image_policy`（`auto`/`local`）来自 default.conf，`create --local`
+  单次强制 local。本地文件已存在时绝不联网、绝不替换；缺失时 auto 先
+  `resolve_target`（url 直链 / index 目录页爬虫）→ 校验和比对 → `.part`
+  流式下载 → 原子替换，然后才进入保护级别检查与旧实例销毁。
+  更新已有镜像只能显式 `kvmci images pull`。
+- `images check` 默认只查模板引用镜像，`--all` 查整个目录；`images pull --all`
+  恰为模板引用镜像的去重集合；`pull` 无 ID 且无 `--all` 退出 2。
 - 删除保护字段 `level`（normal/production/protected，缺省 normal）同样三级合并；
   destroy 与 create 的隐式销毁在 `provision/guard.py` 统一把关：production 需交互输入
   yes（`--yes` 跳过；create 还可用 `--force`，但内部仍走优雅关机），非 TTY
@@ -84,9 +100,15 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 ```bash
 uv sync
 uv run pytest
+uvx ruff check src tests
+uv run kvmci images init
+uv run kvmci images refresh
+uv run kvmci images list
+uv run kvmci images check --all
+uv run kvmci images pull --all
 uv run kvmci templates
 uv run kvmci list
-uv run kvmci create <实例名> [--no-wait] [--verbose]
+uv run kvmci create <实例名> [--local] [--no-wait] [--verbose]
 uv run kvmci status <实例名>
 uv run kvmci start|stop|reboot <实例名>
 uv run kvmci cloud-init status <实例名>
@@ -96,12 +118,15 @@ uv run kvmci exec <实例名> -- <命令>
 ```
 
 改动后至少保证 `uv run pytest` 全绿；改了配置字段或 CLI 行为要同步
-README（中英双语）、三个 .conf 示例与本文件。
+README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与本文件。
 
 ## 禁止事项
 
 - 不要重新引入 Bash 脚本或 subprocess 包装 virsh/virt-install/genisoimage/qemu-img，
   也不要用 subprocess 调用 `ssh`/`ssh-keygen`（统一走 paramiko）。
+- 不要为镜像下载引入第三方 HTTP 库或 curl/wget/aria2 子进程；
+  统一走标准库 `urllib` 与 `imagefetch.py`。
+- 不要手改 `images.conf`（系统生成、git-ignored）；用户条目写入 `images.user.conf`。
 - 不要用正则解析 XML/JSON；用 `xml.etree` 与结构化解析。
 - 不要使用 `qemu:///session`。
 - 不要在测试里连接真实 libvirt 或启动虚拟机，也不要做真实 SSH 连接。
@@ -119,3 +144,9 @@ README（中英双语）、三个 .conf 示例与本文件。
 - `ssh.run_command` 的 TTY 分支必须保留 `exec_command()` 返回的 stdin/stderr
   文件对象：只取 stdout 会让 stdin 文件被 GC 并触发 `shutdown_write()`，
   通道立即 EOF，交互式命令卡死。
+- 镜像下载写 `.<文件名>.part`，校验通过后 `os.replace` 原子落盘；失败只删
+  `.part`，绝不破坏已有完整镜像。`images/.state.json` 仅记录最近一次成功下载。
+- `catalog.py` 渲染必须确定性（同一预设始终产出同一份 `images.conf`）；
+  `images.conf` 的上游探测结果只写入 `upstream_*` / `checked_at` 元数据字段。
+- 校验清单兼容 coreutils（`<hash>  <file>`）与 BSD（`SHA256 (<file>) = <hash>`），
+  以及 Fedora 的 PGP 包裹清单；缺校验和且未标 `insecure: true` 时拒绝下载。

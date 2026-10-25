@@ -8,9 +8,15 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 ## 架构边界（不要越层）
 
 - `cli.py`：只做 argparse 参数解析、表格输出与异常到退出码的转换，不写业务逻辑。
-  子命令：create/destroy/start/stop/reboot/status/list/templates/shell/exec/cloud-init。
-- `config.py`：三份 YAML 配置（default/templates/instances）的加载、校验、
-  三级合并（实例 > 模板 > 默认值）。
+  子命令：create/destroy/start/stop/reboot/status/list/templates/shell/exec/
+  cloud-init/images。
+- `config.py`：五份 YAML 配置（default/images/images.user/templates/instances）
+  的加载、校验、三级合并（实例 > 模板 > 默认值），以及镜像目录三层合并
+  （内置预设 > images.conf > images.user.conf）。
+- `catalog.py`：内置主流发行版镜像预设（ID 为 `<家族>-<版本>[-变体]`），
+  并确定性渲染系统 `images.conf`。
+- `imagefetch.py`：镜像获取纯能力层——目录页解析、校验和解析、`.part`
+  流式下载与原子替换、`images/.state.json`；只用标准库 `urllib`。
 - `cloudinit.py`：cloud-init 三份文档的渲染（实例内联 > 模板内联 > path 目录文件）；
   另含运行时把公钥注入合并后 `user-data`（追加到首个非 root 用户，无则新增 `cliff`）。
 - `seediso.py`：临时目录 + pycdlib 生成卷标 `cidata` 的 ISO。
@@ -25,7 +31,8 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
   `guest`（domain XML 生成与启动，含 `ssh-user` 元数据读写）。
 - `provision/`：业务编排包，按职责拆分：`guard`（保护级别）、`create`（创建 + 等待）、
   `lifecycle`（start/stop/reboot/status/destroy）、`access`（shell/exec）、
-  `listing`（list/templates）、`cloudinit_wait`（等待/status/log）；公共 API 由
+  `listing`（list/templates）、`images`（images init/refresh/list/check/pull
+  与 create 的 ensure_image）、`cloudinit_wait`（等待/status/log）；公共 API 由
   `__init__.py` 导出。
 - `errors.py`：所有面向用户的异常，message 必须是可直接展示的英文。
 
@@ -58,15 +65,33 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
     禁止第二套关机轮询；`stop --force` 不跳过优雅关机，仅超时后强制断电。
 12. 所有面向用户的输出（argparse help、print、警告、异常、表头、状态名）用英文；
     代码注释与 docstring 可保持中文。
+13. 镜像用 ID 引用：`templates.conf` 的 `image` 是镜像 ID，不得再出现
+    `image_dir`（本地目录只由 `default.conf` 的 `image_dir` 决定）。
+    系统 `images.conf` 由 `catalog.py` 确定性渲染（缺失自动生成、git-ignored、
+    勿手改）；用户条目只写 `images.user.conf`（永不改写，同名键整条覆盖）。
+14. 镜像获取只用标准库 `urllib`（禁止第三方 HTTP 库与 curl/wget 子进程）；
+    下载写 `.<文件名>.part`，校验和通过后 `os.replace` 原子替换，失败不得
+    破坏已有完整镜像；缺校验和且未标 `insecure: true` 时拒绝下载。
+15. `default.conf` 的 `image_policy`（`auto`/`local`）决定 create 缺失镜像时
+    是否联网；`create --local` 单次强制 local。本地镜像已存在时绝不联网、
+    绝不替换；更新已有镜像只能显式 `kvmci images pull`。自动下载发生在
+    保护级别检查与旧实例销毁之前。
+16. `images check` 默认只查模板引用的镜像，`--all` 查整个目录；
+    `images pull --all` 恰为模板引用镜像的去重集合；`pull` 无 ID 且无 `--all`
+    时退出码 2。
 
 ## 常用命令
 
 ```bash
 uv sync                  # 安装依赖
 uv run pytest            # 单元测试（无需 root/KVM）
+uvx ruff check src tests # 静态检查
+uv run kvmci images init|refresh|list
+uv run kvmci images check [ID ...] [--all] [--include-archived]
+uv run kvmci images pull [ID ...] [--all] [--force]
 uv run kvmci templates
 uv run kvmci list
-uv run kvmci create <实例名> [--template 模板] [--yes] [--force] [--no-wait] [--verbose]
+uv run kvmci create <实例名> [--template 模板] [--local] [--yes] [--force] [--no-wait] [--verbose]
 uv run kvmci start|stop|reboot <实例名> [--force]
 uv run kvmci status <实例名>
 uv run kvmci cloud-init status <实例名>
@@ -81,11 +106,13 @@ uv run kvmci destroy <实例名> [--force] [--yes]
 - 新增业务逻辑必须配 pytest 用例，测试放在 `tests/`。
 - 禁止在单测中建立真实 libvirt 连接或启动虚机；libvirt 对象用 fake/mock，
   XML 用字符串 fixture。
+- 镜像相关测试必须注入 fake opener 或 monkeypatch，禁止真实联网；
+  目录页/校验清单样例放 `tests/fixtures/`。
 - 涉及删除文件/存储卷、undefine、关机的改动，必须有对应测试覆盖。
 
 ## 注意事项
 
-- 三个 `.conf` 文件名虽为 .conf，但内容是 YAML。
+- 五个 `.conf` 文件名虽为 .conf，但内容是 YAML。
 - libvirt-python 的部分绑定不接受 flags 参数（如 `pool.info()`、`vol.info()`、
   `domain.create()`），返回的 info 是 list 而非具名元组，改动时先核对绑定签名。
 - 静默 libvirt 默认错误日志的注册在 `hv/client.py`，业务需自行 try/except。

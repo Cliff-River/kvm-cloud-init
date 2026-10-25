@@ -4,6 +4,9 @@
 .venv/
 images/
 
+# 系统生成的镜像目录（由 kvmci images init/refresh 渲染，勿手工编辑）
+/images.conf
+
 __pycache__/
 .pytest_cache/
 

@@ -122,11 +122,15 @@
 | `insecure` | 否 | `true` 时允许无校验和下载；默认 `false`，缺校验和即失败 |
 | `archived` | 否 | 系统预设使用；用户条目标注也生效（check 默认跳过） |
 
+`checksum_file`（`index` 种）与 `checksum_url`（`url` 种）二选一；
+`index` 种在多版本共用清单（如 AlmaLinux 的 `CHECKSUM`）时可改用
+`checksum_match` 正则从目录页挑选清单文件。
+
 **`kind: url`（固定直链，适合文件名固定、原地更新的源）**：
 
 ```yaml
 almalinux-10:
-  file: AlmaLinux-10-GenericCloud-latest.x86_64.qcow2
+  file: AlmaLinux-10-GenericCloud.x86_64.qcow2
   kind: url
   urls:
     - https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2
@@ -142,7 +146,7 @@ almalinux-10:
 
 ```yaml
 rocky-10-lvm:
-  file: Rocky-10-GenericCloud-LVM-latest.x86_64.qcow2
+  file: Rocky-10-GenericCloud-LVM.x86_64.qcow2
   kind: index
   pages:
     - https://download.rockylinux.org/pub/rocky/10/images/x86_64/
@@ -160,6 +164,9 @@ rocky-10-lvm:
   HEAD 不支持时回退 name 并打印一次英文警告。
 - `checksum_file`：清单 URL 由目录页 URL 与文件名 join 得到；清单内
   可能含多个文件哈希，按**上游真实文件名精确匹配对应行**。
+- `checksum_match`：当清单文件名不固定（如带版本号）时，用正则从目录页
+  href 中挑选清单文件；与 `checksum_file` 互斥，二者都不给则该源无校验和
+  （需 `insecure: true` 才能下载）。
 - 爬虫解析出的真实文件名/版本号只写入生成元数据与状态文件，
   不回写 `images.user.conf`，也不需要用户手改进系统文件。
 
@@ -209,7 +216,7 @@ image_policy: auto
 ```json
 {
   "rocky-10-lvm": {
-    "file": "Rocky-10-GenericCloud-LVM-latest.x86_64.qcow2",
+    "file": "Rocky-10-GenericCloud-LVM.x86_64.qcow2",
     "url": "https://download.rockylinux.org/.../Rocky-10-GenericCloud-LVM-10.2-20260525.0.x86_64.qcow2",
     "version": "10.2-20260525.0",
     "checksum_algo": "sha256",

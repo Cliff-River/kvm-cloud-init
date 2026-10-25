@@ -47,7 +47,9 @@ libvirt API calls — there is no shelling out to `virsh` / `virt-install` /
   Verify with `pkg-config --modversion libvirt` (should print a version).
 - OVMF firmware for UEFI guests (optional — the tool falls back to BIOS).
 - [uv](https://docs.astral.sh/uv/) and Python 3.13+.
-- qcow2 cloud images placed under `images/` (configurable).
+- qcow2 cloud images under `images/` (configurable). A built-in catalog of
+  mainstream distributions can download them automatically; pre-placing files
+  still works and is always used first.
 
 Install dependencies:
 
@@ -59,23 +61,28 @@ uv sync
 
 ```bash
 # 1. Review/edit the config files and templates/<name>/{meta-data,network-config,user-data}
-# 2. List available templates
+# 2. Show the built-in image catalog (offline, auto-generated on first load)
+uv run kvmci images list
+# 3. Optional: pre-download every image referenced by templates.conf
+uv run kvmci images pull --all
+# 4. List available templates
 uv run kvmci templates
-# 3. Create an instance defined in instances.conf (idempotent, waits for cloud-init)
+# 5. Create an instance defined in instances.conf (idempotent, waits for cloud-init;
+#    a missing image is downloaded automatically unless --local is given)
 uv run kvmci create rocky-llm
-# 4. Inspect
+# 6. Inspect
 uv run kvmci list
 uv run kvmci status rocky-llm
 uv run kvmci cloud-init status rocky-llm
-# 5. Start / stop / reboot lifecycle
+# 7. Start / stop / reboot lifecycle
 uv run kvmci stop rocky-llm
 uv run kvmci start rocky-llm
 uv run kvmci reboot rocky-llm
-# 6. SSH into the instance (key + real IP are resolved automatically)
+# 8. SSH into the instance (key + real IP are resolved automatically)
 uv run kvmci shell rocky-llm
-# 7. Run a one-off command
+# 9. Run a one-off command
 uv run kvmci exec rocky-llm -- uname -a
-# 8. Destroy (also removes the auto-generated key pair)
+# 10. Destroy (also removes the auto-generated key pair)
 uv run kvmci destroy rocky-llm
 ```
 
@@ -83,7 +90,7 @@ uv run kvmci destroy rocky-llm
 
 | Command | Description |
 | --- | --- |
-| `create <name> [--template T] [--yes] [--force] [--no-wait] [--verbose]` | Create the instance; a same-named domain is destroyed first. Waits for cloud-init by default (`--no-wait` returns immediately; `--verbose` shows a rolling 7-line view). `--template` overrides the instance's template reference, or allows creating an unregistered instance. `--yes` skips the `production` confirmation; `--force` forces removal of a `production` same-named instance (equivalent to `--yes` for that check). Neither works on `protected`. Also generates `keys/<name>` + `keys/<name>.pub` and injects the public key into the rendered `user-data` at runtime. |
+| `create <name> [--template T] [--local] [--yes] [--force] [--no-wait] [--verbose]` | Create the instance; a same-named domain is destroyed first. Waits for cloud-init by default (`--no-wait` returns immediately; `--verbose` shows a rolling 7-line view). `--template` overrides the instance's template reference, or allows creating an unregistered instance. `--local` uses only an existing local image and never touches the network (a missing image fails with exit 1). Otherwise a missing image is downloaded automatically from the image catalog before any existing instance is destroyed. `--yes` skips the `production` confirmation; `--force` forces removal of a `production` same-named instance (equivalent to `--yes` for that check). Neither works on `protected`. Also generates `keys/<name>` + `keys/<name>.pub` and injects the public key into the rendered `user-data` at runtime. |
 | `destroy <name> [--force] [--yes]` | Graceful shutdown (waits up to `shutdown_timeout` seconds), delete snapshots, undefine with NVRAM and all storage, then delete the auto-generated key pair `keys/<name>` + `keys/<name>.pub`. `--force` powers off on timeout; `--yes` skips the `production` confirmation. `protected` instances are always rejected (and their keys are kept). |
 | `start <name>` | Start a shut-off instance (`dom.create`). Already running is a no-op with `already running` and exit 0. |
 | `stop <name> [--force]` | Graceful ACPI shutdown, polling for up to `shutdown_timeout` seconds. `--force` does **not** skip the graceful attempt; it only powers the guest off after the timeout (same as `destroy --force`). Does not undefine or delete storage/keys. |
@@ -92,7 +99,12 @@ uv run kvmci destroy rocky-llm
 | `cloud-init status <name>` | Run `cloud-init status --long`. Exit code: `0` done, `2` running / not started, `1` error or query failure. |
 | `cloud-init log <name> [-f / --follow]` | Print `/var/log/cloud-init.log`; `-f` streams it until cloud-init reports done (`0`) or error (`1`). |
 | `list` | Configured instances plus any unregistered libvirt domains, with live state. |
-| `templates` | List templates from `templates.conf`. |
+| `templates` | List templates from `templates.conf` with the image ID they reference. |
+| `images init [--force]` | Generate `images.conf` from the built-in preset catalog. Refuses to overwrite unless `--force`; never touches `images.user.conf`; offline. |
+| `images refresh [--include-archived]` | Rebuild `images.conf` and probe every upstream, writing the latest file/version as metadata. Does not download images. |
+| `images list` | Offline table: `Image ID`, `Origin` (`system` / `user` / `user(override)`), `Local` (`present` / `missing`), `Kind`, `Catalog ver.`, `Local ver.`. |
+| `images check [ID ...] [--all] [--include-archived]` | Probe upstream only. Default targets images referenced by templates; `--all` checks the whole catalog. Prints `up to date` / `update available` / `missing` / `unreachable`; exits 1 if anything is missing or outdated. |
+| `images pull [ID ...] [--all] [--force]` | Download or update images. `ID` accepts image IDs (`almalinux-9`, `debian-12`) or template names. `--all` is exactly the deduplicated set of images referenced by `templates.conf`. `--force` re-downloads. No IDs and no `--all` exits 2. |
 | `shell <name>` | Open an interactive SSH session. Starts the instance first if it is shut off, then waits for an IPv4 address. Uses the instance's private key and the **actual** IPv4 address discovered from libvirt (DHCP lease → qemu-guest-agent → ARP), never the address declared in `network-config`. |
 | `exec <name> -- <command>` | Run one command over SSH; starts the instance first if it is shut off. Everything after `--` is joined and passed to the remote shell; stdout/stderr are streamed and the remote exit status becomes the `kvmci` exit code. When local stdin and stdout are both terminals (e.g. `exec <name> -- bash`) a PTY is allocated and forwarded bidirectionally; redirects and pipes keep the non-PTY streaming path. |
 
@@ -120,6 +132,54 @@ SSH user therefore needs passwordless sudo to see them.
 
 Exit codes are `0` success, `1` business failure, `2` usage error.
 
+## Image Catalog
+
+Images are declared in a catalog and referenced by **ID** from `templates.conf`.
+There are three layers, merged into one registry:
+
+| Layer | File | Owner | Rewritten by kvmci |
+| --- | --- | --- | --- |
+| Built-in preset | packaged in `catalog.py` | system | with a tool upgrade |
+| System catalog | `images.conf` (git-ignored) | system | generated/refreshed automatically |
+| User catalog | `images.user.conf` (tracked) | you | **never** |
+
+`images.conf` is rendered deterministically from the bundled preset on first
+load (or by `kvmci images init`) and lists mainstream distributions:
+AlmaLinux 8/9/10, Rocky 8/9/10 (GenericCloud and LVM), CentOS Stream 9/10,
+Debian 11/12/13, Ubuntu 20.04/22.04/24.04/26.04 and Fedora 43/44. EOL releases
+are marked `archived` and skipped by `check`/`refresh` unless
+`--include-archived` is used.
+
+Add or override entries in `images.user.conf` (same schema; a same-named key
+replaces the system definition wholesale):
+
+```yaml
+my-internal:
+  file: my-internal-1.0.qcow2
+  kind: url
+  urls:
+    - http://mirror.example.internal/images/my-internal-1.0.qcow2
+  checksum_url: http://mirror.example.internal/images/my-internal-1.0.qcow2.sha256
+```
+
+Two source kinds are supported:
+
+- `url`: fixed links that are updated in place (`urls`, `checksum_url`).
+- `index`: crawl an HTTP directory listing, pick the newest file matching
+  `match` (by `name` or `mtime`), and locate the checksum with
+  `checksum_file` or `checksum_match` (`pages`, `checksum_algo`).
+
+Downloads are streamed with stdlib `urllib` to `.<file>.part`, hashed on the
+fly, verified against the upstream checksum, and atomically renamed. Failures
+never touch an existing complete image. `images/.state.json` records the last
+successful download for version display only.
+
+`create` uses the local file if it exists (never touches the network, even when
+a newer upstream exists). If it is missing, `image_policy: auto` (default)
+resolves and downloads it first; `image_policy: local` or `create --local`
+fails with `ImageNotFound` instead. Updating an existing image is always an
+explicit `kvmci images pull`.
+
 ## Deletion Protection
 
 The `level` field (`normal` / `production` / `protected`, default `normal`)
@@ -143,12 +203,14 @@ shuts down gracefully).
 
 ## Configuration
 
-All three `.conf` files are YAML. Precedence:
+All `.conf` files are YAML (`default.conf`, `images.conf`, `images.user.conf`,
+`templates.conf`, `instances.conf`). Precedence for instance settings:
 **instance > template > `default.conf`**.
 
 ### `default.conf`
 
-`storage_pool`, `image_dir`, `memory` (MiB), `vcpus`, `network`,
+`storage_pool`, `image_dir`, `image_policy` (`auto`/`local`), `memory` (MiB),
+`vcpus`, `network`,
 `firmware` (`auto`/`uefi`/`bios`), `graphics` (`vnc`/`spice`/`none`),
 `video` (`auto`/`virtio`/`bochs`/`cirrus`/`qxl`),
 `level` (`normal`/`production`/`protected`, implicit default `normal`),
@@ -162,8 +224,7 @@ All three `.conf` files are YAML. Precedence:
 ```yaml
 rocky:                                # template name, top-level key
   path: templates/Rocky-LVM           # directory with the three cloud-init files
-  image_dir: images/                  # optional, defaults to default.conf image_dir
-  image: Rocky-10-GenericCloud.qcow2  # required
+  image: rocky-10-lvm                 # required: image ID from the catalog
   os_variant: rocky10                 # recorded in domain metadata
   memory: 6144                        # optional overrides
   vcpus: 6
@@ -290,7 +351,8 @@ sudo dnf install -y gcc make pkgconfig libvirt-devel
 可用 `pkg-config --modversion libvirt` 验证（应输出版本号）。
 - UEFI 客户机需要 OVMF 固件（可选，缺失时回退 BIOS）。
 - 已安装 [uv](https://docs.astral.sh/uv/)，Python 3.13+。
-- qcow2 云镜像放在 `images/`（可配置）。
+- qcow2 云镜像放在 `images/`（可配置）。内置主流发行版镜像目录，
+  缺失时可自动下载；也可以预先放置文件，本地文件始终优先使用。
 
 安装依赖：
 
@@ -302,23 +364,28 @@ uv sync
 
 ```bash
 # 1. 检查/编辑配置文件与 templates/<名称>/ 下的 cloud-init 三件套
-# 2. 查看可用模板
+# 2. 查看内置镜像目录（离线；首次加载会自动生成 images.conf）
+uv run kvmci images list
+# 3. 可选：预下载 templates.conf 引用的全部镜像
+uv run kvmci images pull --all
+# 4. 查看可用模板
 uv run kvmci templates
-# 3. 创建 instances.conf 中定义的实例（幂等，默认等待 cloud-init）
+# 5. 创建 instances.conf 中定义的实例（幂等，默认等待 cloud-init；
+#    镜像缺失会自动下载，除非指定 --local）
 uv run kvmci create rocky-llm
-# 4. 查看状态
+# 6. 查看状态
 uv run kvmci list
 uv run kvmci status rocky-llm
 uv run kvmci cloud-init status rocky-llm
-# 5. 启停与重启
+# 7. 启停与重启
 uv run kvmci stop rocky-llm
 uv run kvmci start rocky-llm
 uv run kvmci reboot rocky-llm
-# 6. SSH 登录实例（自动使用密钥与实际 IP）
+# 8. SSH 登录实例（自动使用密钥与实际 IP）
 uv run kvmci shell rocky-llm
-# 7. 执行一次性命令
+# 9. 执行一次性命令
 uv run kvmci exec rocky-llm -- uname -a
-# 8. 销毁（同时删除自动生成的密钥对）
+# 10. 销毁（同时删除自动生成的密钥对）
 uv run kvmci destroy rocky-llm
 ```
 
@@ -326,7 +393,7 @@ uv run kvmci destroy rocky-llm
 
 | 命令 | 说明 |
 | --- | --- |
-| `create <名称> [--template T] [--yes] [--force] [--no-wait] [--verbose]` | 创建实例，同名域会先被销毁；默认等待 cloud-init 完成（`--no-wait` 立即返回，`--verbose` 以 7 行滚动区域展示输出）；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板；`--yes` 跳过 production 确认；`--force` 强制删除 production 同名旧实例后重建（对该检查等价于 `--yes`）；二者对 protected 均无效。同时生成 `keys/<名称>` 与 `keys/<名称>.pub`，并在运行时把公钥注入渲染后的 `user-data` |
+| `create <名称> [--template T] [--local] [--yes] [--force] [--no-wait] [--verbose]` | 创建实例，同名域会先被销毁；默认等待 cloud-init 完成（`--no-wait` 立即返回，`--verbose` 以 7 行滚动区域展示输出）；`--template` 可覆盖实例引用的模板，也可对未登记实例临时指定模板；`--local` 只允许使用本地已有镜像、绝不联网（缺失时退出 1），否则缺失镜像会在销毁旧实例之前从镜像目录自动下载；`--yes` 跳过 production 确认；`--force` 强制删除 production 同名旧实例后重建（对该检查等价于 `--yes`）；二者对 protected 均无效。同时生成 `keys/<名称>` 与 `keys/<名称>.pub`，并在运行时把公钥注入渲染后的 `user-data` |
 | `destroy <名称> [--force] [--yes]` | 优雅关机（等待 `shutdown_timeout` 秒）、删除快照、带 NVRAM undefine 并清理全部存储，随后删除自动生成的密钥对 `keys/<名称>` 与 `keys/<名称>.pub`；`--force` 超时后强制断电；`--yes` 跳过 production 确认；protected 实例始终被拒绝（密钥一并保留） |
 | `start <名称>` | 启动已关机的实例（`dom.create`）；已运行时提示 `already running` 并以 0 退出 |
 | `stop <名称> [--force]` | ACPI 优雅关机，按 `shutdown_timeout` 轮询；`--force` **不会**跳过优雅关机，仅在超时后强制断电（与 `destroy --force` 语义一致）；不 undefine、不删除存储与密钥 |
@@ -335,7 +402,12 @@ uv run kvmci destroy rocky-llm
 | `cloud-init status <名称>` | 执行 `cloud-init status --long`；退出码：done 为 0，running / not started 为 2，error 或查询失败为 1 |
 | `cloud-init log <名称> [-f / --follow]` | 输出 `/var/log/cloud-init.log`；`-f` 实时跟随到 cloud-init done（0）或 error（1） |
 | `list` | 列出已登记实例与未登记的 libvirt 域及实时状态 |
-| `templates` | 列出 `templates.conf` 中定义的模板 |
+| `templates` | 列出 `templates.conf` 中定义的模板及引用的镜像 ID |
+| `images init [--force]` | 由内置预设目录生成 `images.conf`；已存在时拒绝覆盖（`--force` 强制），绝不改写 `images.user.conf`；离线执行 |
+| `images refresh [--include-archived]` | 重建 `images.conf` 并探测各上游，把最新文件名/版本写入元数据；不下载镜像 |
+| `images list` | 离线表格：`Image ID`、`Origin`（`system` / `user` / `user(override)`）、`Local`（`present` / `missing`）、`Kind`、`Catalog ver.`、`Local ver.` |
+| `images check [ID ...] [--all] [--include-archived]` | 仅探测上游。默认检查模板引用的镜像，`--all` 检查整个目录；输出 `up to date` / `update available` / `missing` / `unreachable`，存在缺失或过期时退出 1 |
+| `images pull [ID ...] [--all] [--force]` | 下载或更新镜像。`ID` 支持镜像 ID（`almalinux-9`、`debian-12`）或模板名；`--all` 恰为 `templates.conf` 引用镜像的去重集合；`--force` 重新下载；既无 ID 也无 `--all` 时退出 2 |
 | `shell <名称>` | 打开 SSH 交互式登录会话；实例已关机时先自动启动并等待 IPv4 就绪。使用实例私钥与 libvirt 实测 IPv4 地址（DHCP 租约 → qemu-guest-agent → ARP 依次回退），绝不信任 `network-config` 中声明的地址 |
 | `exec <名称> -- <命令>` | 执行一条命令；实例已关机时先自动启动并等待 IPv4 就绪。`--` 之后的所有参数拼接后交给远端 shell，实时透传 stdout/stderr，远端退出码即 `kvmci` 退出码。本地 stdin 与 stdout 均为终端时（如 `exec <名称> -- bash`）申请 PTY 并双向转发，交互式程序可正常使用；重定向或管道仍走无 PTY 的流式路径 |
 
@@ -360,6 +432,46 @@ cloud-init 日志通常仅 root/组可读，读取失败时会自动回退到 `s
 
 退出码约定：`0` 成功，`1` 业务失败，`2` 参数错误。
 
+## 镜像目录
+
+镜像在目录中声明，`templates.conf` 通过 **镜像 ID** 引用。三层来源合并为一张注册表：
+
+| 层级 | 文件 | 归属 | 是否会被 kvmci 改写 |
+| --- | --- | --- | --- |
+| 内置预设 | 打包在 `catalog.py` | 系统 | 随工具升级 |
+| 系统目录 | `images.conf`（git-ignored） | 系统 | 首次加载自动生成，可 `images refresh` |
+| 用户目录 | `images.user.conf`（纳入版本控制） | 你 | **永不** |
+
+`images.conf` 由内置预设确定性渲染（首次加载或 `kvmci images init`），覆盖主流发行版：
+AlmaLinux 8/9/10、Rocky 8/9/10（GenericCloud 与 LVM）、CentOS Stream 9/10、
+Debian 11/12/13、Ubuntu 20.04/22.04/24.04/26.04、Fedora 43/44。EOL 版本标记为
+`archived`，`check` / `refresh` 默认跳过，`--include-archived` 可纳入。
+
+在 `images.user.conf` 中新增或覆盖条目（同名键会整条替换系统定义）：
+
+```yaml
+my-internal:
+  file: my-internal-1.0.qcow2
+  kind: url
+  urls:
+    - http://mirror.example.internal/images/my-internal-1.0.qcow2
+  checksum_url: http://mirror.example.internal/images/my-internal-1.0.qcow2.sha256
+```
+
+支持两种来源：
+
+- `url`：固定直链，原位更新（`urls`、`checksum_url`）。
+- `index`：抓取 HTTP 目录页，按 `match` 选最新文件（`name` 或 `mtime` 排序），
+  并用 `checksum_file` 或 `checksum_match` 定位校验清单（`pages`、`checksum_algo`）。
+
+下载使用标准库 `urllib` 流式写入 `.<文件名>.part`，边下边算哈希，与上游校验和比对后
+原子重命名；失败不会破坏已有完整镜像。`images/.state.json` 仅用于记录最近一次成功
+下载的版本。
+
+`create` 优先使用本地已有文件（即使上游有更新也绝不触网）；文件缺失时，
+`image_policy: auto`（默认）会解析并先下载，`image_policy: local` 或 `create --local`
+则以 `ImageNotFound` 失败。更新已有镜像始终需要显式执行 `kvmci images pull`。
+
 ## 删除保护
 
 `level` 字段取值 `normal` / `production` / `protected`，缺省为 `normal`，
@@ -380,12 +492,14 @@ create 的 `--force` 只用于绕过 production 确认（隐式销毁仍走优�
 
 ## 配置说明
 
-三个 `.conf` 均为 YAML。优先级：
+全部 `.conf` 文件均为 YAML（`default.conf`、`images.conf`、`images.user.conf`、
+`templates.conf`、`instances.conf`）。实例设置的优先级：
 **实例 > 模板 > `default.conf`**。
 
 ### `default.conf`
 
-字段：`storage_pool`、`image_dir`、`memory`（MiB）、`vcpus`、`network`、
+字段：`storage_pool`、`image_dir`、`image_policy`（`auto`/`local`）、`memory`（MiB）、
+`vcpus`、`network`、
 `firmware`（`auto`/`uefi`/`bios`）、`graphics`（`vnc`/`spice`/`none`）、
 `video`（`auto`/`virtio`/`bochs`/`cirrus`/`qxl`）、
 `level`（`normal`/`production`/`protected`，隐式缺省 `normal`）、
@@ -399,8 +513,7 @@ create 的 `--force` 只用于绕过 production 确认（隐式销毁仍走优�
 ```yaml
 rocky:                                # 模板名，顶层键
   path: templates/Rocky-LVM           # 内含 cloud-init 三件套的目录
-  image_dir: images/                  # 可选，缺省取 default.conf
-  image: Rocky-10-GenericCloud.qcow2  # 必填
+  image: rocky-10-lvm                 # 必填：镜像目录中的镜像 ID
   os_variant: rocky10                 # 记入域 metadata
   memory: 6144                        # 以下均为可选覆盖
   vcpus: 6

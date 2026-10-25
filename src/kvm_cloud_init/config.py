@@ -1,23 +1,29 @@
-"""三个 YAML 配置文件的加载、校验与优先级合并。
+"""配置文件加载、校验与优先级合并。
 
 文件（均位于项目根目录）：
-- ``default.conf``    全局默认值，最低优先级
-- ``templates.conf``  OS 模板定义
-- ``instances.conf``  实例定义，最高优先级
+
+- ``default.conf``       全局默认值，最低优先级
+- ``images.conf``        系统生成的云镜像目录（内置预设渲染，缺失时自动生成）
+- ``images.user.conf``   用户自定义镜像源（可选，工具永不改写）
+- ``templates.conf``     OS 模板定义
+- ``instances.conf``     实例定义，最高优先级
 
 合并优先级：实例覆盖 > 模板定义 > default.conf。
-cloud-init 三份文档（meta-data / network-config / user-data）只做整块替换，
-不做 YAML 深合并。
+镜像注册表由 ``images.conf`` 与 ``images.user.conf`` 合并而成，用户同名条目
+整体覆盖系统条目。cloud-init 三份文档（meta-data / network-config /
+user-data）只做整块替换，不做 YAML 深合并。
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from . import catalog
 from .errors import ConfigError, InstanceNotFound, TemplateNotFound
 
 # cloud-init NoCloud 的三份文档文件名（也是模板/实例配置中的内联字段名）
@@ -31,6 +37,18 @@ _VALID_VIDEO = ("auto", "virtio", "bochs", "cirrus", "qxl")
 _VALID_LEVEL = ("normal", "production", "protected")
 #: 模板/实例可覆盖的字符串型枚举选项（graphics/video/level）
 _CHOICE_FIELDS = ("graphics", "video", "level")
+#: 镜像源类型与校验算法
+_VALID_IMAGE_KIND = ("url", "index")
+_VALID_ORDER_BY = ("name", "mtime")
+_VALID_CHECKSUM_ALGO = ("sha256", "sha512")
+#: 镜像缺失时的获取策略
+_VALID_IMAGE_POLICY = ("auto", "local")
+_IMAGE_FIELDS = {
+    "file", "kind", "arch", "urls", "pages", "match", "order_by",
+    "checksum_url", "checksum_file", "checksum_match", "checksum_algo",
+    "insecure", "archived", "upstream_file", "upstream_version",
+    "checked_at", "upstream_status",
+}
 
 
 def project_root() -> Path:
@@ -42,6 +60,7 @@ def project_root() -> Path:
 class Defaults:
     storage_pool: str = "default"
     image_dir: str = "images"
+    image_policy: str = "auto"
     memory: int = 6144
     vcpus: int = 6
     network: str = "default"
@@ -52,6 +71,31 @@ class Defaults:
     shutdown_timeout: int = 120
 
 
+@dataclass(frozen=True)
+class ImageSource:
+    """镜像目录中的一个条目（系统预设或用户自定义）。"""
+
+    id: str
+    file: str
+    kind: str
+    urls: tuple[str, ...] = ()
+    pages: tuple[str, ...] = ()
+    match: str | None = None
+    order_by: str = "name"
+    checksum_url: str | None = None
+    checksum_file: str | None = None
+    checksum_match: str | None = None
+    checksum_algo: str = "sha256"
+    insecure: bool = False
+    archived: bool = False
+    arch: str = "x86_64"
+    upstream_file: str | None = None
+    upstream_version: str | None = None
+    checked_at: str | None = None
+    upstream_status: str | None = None
+    origin: str = "system"
+
+
 @dataclass
 class Template:
     """templates.conf 中的一个 OS 模板。"""
@@ -59,7 +103,6 @@ class Template:
     name: str
     image: str
     path: str | None = None
-    image_dir: str | None = None
     os_variant: str = ""
     memory: int | None = None
     vcpus: int | None = None
@@ -92,6 +135,7 @@ class ResolvedInstance:
     name: str
     template: Template
     instance: InstanceSpec | None
+    image_id: str
     image_path: Path
     memory: int
     vcpus: int
@@ -150,6 +194,132 @@ def _choice(value: Any, options: tuple[str, ...], context: str) -> str:
     return text
 
 
+def _as_bool(value: Any, context: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{context} must be a boolean, got: {value!r}")
+    return value
+
+
+def _as_urls(value: Any, context: str) -> tuple[str, ...]:
+    if isinstance(value, str) or not isinstance(value, list) or not value:
+        raise ConfigError(f"{context} must be a non-empty list of URLs")
+    urls = tuple(str(item) for item in value)
+    for url in urls:
+        if not url.startswith(("http://", "https://", "file://")):
+            raise ConfigError(f"{context} contains an unsupported URL: {url}")
+    return urls
+
+
+def _parse_image_source(image_id: str, raw: Any, origin: str) -> ImageSource:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"Image {image_id} definition must be a mapping")
+    unknown = set(raw) - _IMAGE_FIELDS
+    if unknown:
+        raise ConfigError(
+            f"Unknown fields in image {image_id}: {', '.join(sorted(unknown))}"
+        )
+    for required in ("file", "kind"):
+        if required not in raw or not raw[required]:
+            raise ConfigError(f"Image {image_id} is missing required field {required}")
+
+    filename = str(raw["file"])
+    if filename != Path(filename).name:
+        raise ConfigError(
+            f"Image {image_id} field file must be a plain file name, got: {filename}"
+        )
+    kind = _choice(raw["kind"], _VALID_IMAGE_KIND, f"image {image_id} field kind")
+    order_by = _choice(
+        raw.get("order_by", "name"),
+        _VALID_ORDER_BY,
+        f"image {image_id} field order_by",
+    )
+    checksum_algo = _choice(
+        raw.get("checksum_algo", "sha256"),
+        _VALID_CHECKSUM_ALGO,
+        f"image {image_id} field checksum_algo",
+    )
+
+    urls: tuple[str, ...] = ()
+    pages: tuple[str, ...] = ()
+    match: str | None = None
+    checksum_url: str | None = None
+    checksum_file: str | None = None
+    checksum_match: str | None = None
+
+    if kind == "url":
+        urls = _as_urls(raw.get("urls"), f"image {image_id} field urls")
+        checksum_url = str(raw["checksum_url"]) if raw.get("checksum_url") else None
+        if raw.get("pages") or raw.get("match") or raw.get("checksum_match"):
+            raise ConfigError(
+                f"Image {image_id} uses kind url; pages/match/checksum_match "
+                "are only valid for kind index"
+            )
+    else:
+        pages = _as_urls(raw.get("pages"), f"image {image_id} field pages")
+        if not raw.get("match"):
+            raise ConfigError(f"Image {image_id} is missing required field match")
+        match = str(raw["match"])
+        try:
+            re.compile(match)
+        except re.error as exc:
+            raise ConfigError(
+                f"Image {image_id} field match is not a valid regular expression: {exc}"
+            ) from exc
+        checksum_file = (
+            str(raw["checksum_file"]) if raw.get("checksum_file") else None
+        )
+        checksum_match = (
+            str(raw["checksum_match"]) if raw.get("checksum_match") else None
+        )
+        if checksum_match:
+            try:
+                re.compile(checksum_match)
+            except re.error as exc:
+                raise ConfigError(
+                    f"Image {image_id} field checksum_match is not a valid "
+                    f"regular expression: {exc}"
+                ) from exc
+        if raw.get("urls") or raw.get("checksum_url"):
+            raise ConfigError(
+                f"Image {image_id} uses kind index; urls/checksum_url "
+                "are only valid for kind url"
+            )
+
+    if not (checksum_url or checksum_file or checksum_match) and not raw.get(
+        "insecure"
+    ):
+        raise ConfigError(
+            f"Image {image_id} has no checksum source; set checksum_url/"
+            "checksum_file/checksum_match or explicitly insecure: true"
+        )
+
+    return ImageSource(
+        id=image_id,
+        file=filename,
+        kind=kind,
+        urls=urls,
+        pages=pages,
+        match=match,
+        order_by=order_by,
+        checksum_url=checksum_url,
+        checksum_file=checksum_file,
+        checksum_match=checksum_match,
+        checksum_algo=checksum_algo,
+        insecure=_as_bool(raw.get("insecure", False), f"image {image_id} field insecure"),
+        archived=_as_bool(raw.get("archived", False), f"image {image_id} field archived"),
+        arch=str(raw.get("arch", "x86_64")),
+        upstream_file=str(raw["upstream_file"]) if raw.get("upstream_file") else None,
+        upstream_version=(
+            str(raw["upstream_version"]) if raw.get("upstream_version") else None
+        ),
+        checked_at=str(raw["checked_at"]) if raw.get("checked_at") else None,
+        upstream_status=(
+            str(raw["upstream_status"]) if raw.get("upstream_status") else None
+        ),
+        origin=origin,
+    )
+
+
 def _parse_defaults(raw: dict[str, Any]) -> Defaults:
     allowed = set(Defaults.__dataclass_fields__)
     unknown = set(raw) - allowed
@@ -160,6 +330,10 @@ def _parse_defaults(raw: dict[str, Any]) -> Defaults:
         defaults.storage_pool = str(raw["storage_pool"])
     if "image_dir" in raw:
         defaults.image_dir = str(raw["image_dir"])
+    if "image_policy" in raw:
+        defaults.image_policy = _choice(
+            raw["image_policy"], _VALID_IMAGE_POLICY, "default.conf field image_policy"
+        )
     if "memory" in raw:
         defaults.memory = _as_int(raw["memory"], "default.conf field memory")
     if "vcpus" in raw:
@@ -203,8 +377,6 @@ def _parse_template(name: str, raw: Any) -> Template:
     tpl = Template(name=name, image=str(raw["image"]))
     if "path" in raw and raw["path"] is not None:
         tpl.path = str(raw["path"])
-    if "image_dir" in raw and raw["image_dir"] is not None:
-        tpl.image_dir = str(raw["image_dir"])
     if "os_variant" in raw and raw["os_variant"] is not None:
         tpl.os_variant = str(raw["os_variant"])
     if "memory" in raw and raw["memory"] is not None:
@@ -221,7 +393,7 @@ def _parse_template(name: str, raw: Any) -> Template:
         tpl.level = _choice(raw["level"], _VALID_LEVEL, f"template {name} field level")
     tpl.docs = _extract_docs(raw, f"template {name}")
     allowed = {
-        "path", "image_dir", "image", "os_variant", "memory", "vcpus",
+        "path", "image", "os_variant", "memory", "vcpus",
         "capacity", *_CHOICE_FIELDS, *DOC_NAMES,
     }
     unknown = set(raw) - allowed
@@ -258,7 +430,7 @@ def _parse_instance(name: str, raw: Any) -> InstanceSpec:
 
 
 class ConfigStore:
-    """加载并持有三份配置，提供实例解析。"""
+    """加载并持有全部配置，提供镜像注册表查询与实例解析。"""
 
     def __init__(
         self,
@@ -266,11 +438,28 @@ class ConfigStore:
         defaults: Defaults,
         templates: dict[str, Template],
         instances: dict[str, InstanceSpec],
+        images: dict[str, ImageSource],
     ) -> None:
         self.root = root
         self.defaults = defaults
         self.templates = templates
         self.instances = instances
+        self.images = images
+
+    @property
+    def image_dir(self) -> Path:
+        return self.root / self.defaults.image_dir
+
+    def image_path(self, image_id: str) -> Path:
+        """镜像 ID 对应的本地固定文件路径。"""
+        return (self.image_dir / self.images[image_id].file).resolve()
+
+    def template_image_ids(self) -> list[str]:
+        """模板引用到的镜像 ID（按模板顺序去重）。"""
+        seen: dict[str, None] = {}
+        for tpl in self.templates.values():
+            seen.setdefault(tpl.image, None)
+        return list(seen)
 
     @classmethod
     def load(cls, root: Path | str | None = None) -> ConfigStore:
@@ -278,7 +467,7 @@ class ConfigStore:
         defaults = _parse_defaults(_load_yaml(base / "default.conf"))
 
         # 顶层即模板/实例表（文件名已表明语义，不再使用包装键）。
-        # templates / instances 为保留名，用于识别旧格式并给出迁移提示。
+        # templates / instances / images 为保留名，用于识别旧格式并给出迁移提示。
         templates = {
             name: _parse_template(name, body)
             for name, body in _load_table(base / "templates.conf", "templates").items()
@@ -287,15 +476,24 @@ class ConfigStore:
             name: _parse_instance(name, body)
             for name, body in _load_table(base / "instances.conf", "instances").items()
         }
+        images = _load_images(base)
 
-        # 交叉校验：实例引用的模板必须存在
+        # 交叉校验：实例引用的模板必须存在，模板引用的镜像 ID 必须存在
         for inst in instances.values():
             if inst.template not in templates:
                 raise ConfigError(
                     f"Instance {inst.name} references template {inst.template}, "
                     "which is not defined in templates.conf"
                 )
-        return cls(base, defaults, templates, instances)
+        for tpl in templates.values():
+            if tpl.image not in images:
+                raise ConfigError(
+                    f"Template {tpl.name} references image {tpl.image}, which is "
+                    f"not defined in {catalog.CATALOG_FILENAME} or "
+                    f"{catalog.USER_CATALOG_FILENAME}"
+                )
+        _reject_duplicate_files(images)
+        return cls(base, defaults, templates, instances, images)
 
     def resolve(self, name: str, template_name: str | None = None) -> ResolvedInstance:
         """合并出创建实例所需的全部标量参数。
@@ -328,14 +526,12 @@ class ConfigStore:
         else:
             capacity = tpl.capacity
 
-        image_dir = tpl.image_dir or self.defaults.image_dir
-        image_path = (self.root / image_dir / tpl.image).resolve()
-
         return ResolvedInstance(
             name=name,
             template=tpl,
             instance=inst,
-            image_path=image_path,
+            image_id=tpl.image,
+            image_path=self.image_path(tpl.image),
             memory=memory,
             vcpus=vcpus,
             capacity=str(capacity) if capacity is not None else None,
@@ -347,3 +543,41 @@ class ConfigStore:
             shutdown_timeout=self.defaults.shutdown_timeout,
             storage_pool=self.defaults.storage_pool,
         )
+
+
+def _load_images(base: Path) -> dict[str, ImageSource]:
+    """加载并合并系统生成目录与用户自定义目录（用户同名条目整体覆盖）。"""
+    system_path = base / catalog.CATALOG_FILENAME
+    if not system_path.exists():
+        _write_catalog(system_path, catalog.render_catalog())
+
+    images: dict[str, ImageSource] = {}
+    for image_id, body in _load_table(system_path, "images").items():
+        images[image_id] = _parse_image_source(image_id, body, "system")
+
+    user_path = base / catalog.USER_CATALOG_FILENAME
+    if user_path.exists():
+        for image_id, body in _load_table(user_path, "images").items():
+            origin = "user(override)" if image_id in images else "user"
+            images[image_id] = _parse_image_source(image_id, body, origin)
+    return images
+
+
+def _write_catalog(path: Path, text: str) -> None:
+    """原子写入生成的 images.conf（先临时文件再 os.replace）。"""
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _reject_duplicate_files(images: dict[str, ImageSource]) -> None:
+    owners: dict[str, str] = {}
+    for image_id, source in images.items():
+        previous = owners.get(source.file)
+        if previous is not None:
+            raise ConfigError(
+                f"Images {previous} and {image_id} both map to local file "
+                f"{source.file}; local file names must be unique"
+            )
+        owners[source.file] = image_id
+
