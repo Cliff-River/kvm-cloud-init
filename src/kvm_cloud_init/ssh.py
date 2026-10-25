@@ -16,6 +16,7 @@ import time
 import tty
 from collections.abc import Callable
 from pathlib import Path
+from types import FrameType
 
 import paramiko
 
@@ -139,47 +140,85 @@ def interactive_shell(instance: str, host: str, user: str, key_path: Path) -> in
         except OSError:
             width, height = 80, 24
         chan = client.invoke_shell(term=term, width=width, height=height)
-        chan.setblocking(0)
-        stdin_fd = sys.stdin.fileno()
-        old_attrs = None
-        if sys.stdin.isatty():
-            old_attrs = termios.tcgetattr(stdin_fd)
-            tty.setraw(stdin_fd)
-            signal.signal(signal.SIGWINCH, lambda *_: _sync_window_size(chan))
-        _sync_window_size(chan)
-        try:
-            return _pump(chan, stdin_fd)
-        finally:
-            if old_attrs is not None:
-                termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_attrs)
+        return _pump_interactive(chan, sys.stdin.fileno())
     finally:
         client.close()
 
 
-def _pump(chan: paramiko.Channel, stdin_fd: int) -> int:
+def _pump_interactive(chan: paramiko.Channel, stdin_fd: int) -> int:
+    """在本地终端与远端 channel 之间双向转发，返回远端退出码。"""
+    chan.setblocking(0)
+    old_attrs = None
+    # 记录并在退出时恢复原 SIGWINCH handler，避免污染同一进程内的后续操作。
+    old_winch = signal.getsignal(signal.SIGWINCH)
+    try:
+        if sys.stdin.isatty():
+            old_attrs = termios.tcgetattr(stdin_fd)
+            tty.setraw(stdin_fd)
+
+            def _on_winch(_signum: int, _frame: FrameType | None) -> None:
+                _sync_window_size(chan)
+
+            signal.signal(signal.SIGWINCH, _on_winch)
+        _sync_window_size(chan)
+        return _pump(chan, stdin_fd)
+    finally:
+        if old_attrs is not None:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_attrs)
+        signal.signal(signal.SIGWINCH, old_winch)
+
+
+def _pump(chan: paramiko.Channel, stdin_fd: int | None) -> int:
     """在本地 stdin 与远端 channel 之间双向转发，直到远端结束。"""
     while True:
         if chan.exit_status_ready() and not chan.recv_ready():
             break
-        readable, _, _ = select.select([stdin_fd, chan], [], [], 0.5)
-        if chan in readable:
+        # select 的 watch 列表只放 int 型 fd：select 对 Channel 也是调用
+        # fileno()，混合 int 与对象会让类型检查器无法判定成员关系；
+        # 通道是否有数据改用 recv_ready()（paramiko 内部也可能缓冲了
+        # select 信号之外的已解密数据）。
+        watch: list[int] = [chan.fileno()]
+        if stdin_fd is not None:
+            watch.append(stdin_fd)
+        readable, _, _ = select.select(watch, [], [], 0.5)
+        if chan.recv_ready():
             data = chan.recv(_BUFSIZE)
             if data:
                 sys.stdout.buffer.write(data)
                 sys.stdout.buffer.flush()
-        if stdin_fd in readable:
+        if stdin_fd is not None and stdin_fd in readable:
             data = os.read(stdin_fd, _BUFSIZE)
             if data:
+                # 通道处于非阻塞模式，发送时临时切回阻塞，避免短写自旋。
+                chan.settimeout(None)
                 chan.sendall(data)
+                chan.settimeout(0.0)
             else:
                 chan.shutdown_write()
+                stdin_fd = None
     return chan.recv_exit_status()
 
 
+def _stdio_is_tty() -> bool:
+    """本地 stdin 与 stdout 是否同时是终端。"""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def run_command(instance: str, host: str, user: str, key_path: Path, command: str) -> int:
-    """在远端执行一条命令，透传输出，返回远端退出码。"""
+    """在远端执行一条命令，透传输出，返回远端退出码。
+
+    本地 stdin/stdout 都是终端时（如 ``exec <实例> -- bash``）申请 PTY
+    并双向转发，使远端交互式程序可正常使用；重定向或管道场景保持
+    不分配 PTY，避免 CRLF 与终端格式污染。
+    """
     client = _connect(instance, host, user, key_path)
     try:
+        if _stdio_is_tty():
+            # 必须保留 stdin/stderr 文件对象：其析构会调用 shutdown_write，
+            # 导致通道立即进入 EOF、后续输入无法发送。
+            _stdin, stdout, _stderr = client.exec_command(command, get_pty=True)
+            chan = stdout.channel
+            return _pump_interactive(chan, sys.stdin.fileno())
         _stdin, stdout, _stderr = client.exec_command(command)
         chan = stdout.channel
         chan.setblocking(0)

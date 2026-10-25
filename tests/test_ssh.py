@@ -68,13 +68,37 @@ def test_delete_keypair_removes_both_and_is_idempotent(keys_root: Path) -> None:
 
 
 class _FakeChannel:
-    def __init__(self, out: bytes = b"", err: bytes = b"", status: int = 0) -> None:
+    def __init__(
+        self,
+        out: bytes = b"",
+        err: bytes = b"",
+        status: int = 0,
+        hold_exit: int = 0,
+    ) -> None:
         self._out = out
         self._err = err
         self._status = status
+        # 前 hold_exit 次 exit_status_ready() 强制返回 False，
+        # 用于模拟远端仍在运行、输出缓冲却已排空的间隙。
+        self._hold_exit = hold_exit
+        self.sent = b""
+        self.timeouts: list[object] = []
+        self.write_shut_down = False
 
     def setblocking(self, _flag: int) -> None:
         pass
+
+    def fileno(self) -> int:
+        return 99
+
+    def settimeout(self, timeout: object) -> None:
+        self.timeouts.append(timeout)
+
+    def sendall(self, data: bytes) -> None:
+        self.sent += data
+
+    def shutdown_write(self) -> None:
+        self.write_shut_down = True
 
     def recv_ready(self) -> bool:
         return bool(self._out)
@@ -91,6 +115,9 @@ class _FakeChannel:
         return chunk
 
     def exit_status_ready(self) -> bool:
+        if self._hold_exit > 0:
+            self._hold_exit -= 1
+            return False
         return not self._out and not self._err
 
     def recv_exit_status(self) -> int:
@@ -106,10 +133,12 @@ class _FakeClient:
     def __init__(self, chan: _FakeChannel) -> None:
         self.chan = chan
         self.command: str | None = None
+        self.get_pty: bool | None = None
         self.closed = False
 
-    def exec_command(self, command: str):
+    def exec_command(self, command: str, **kwargs):
         self.command = command
+        self.get_pty = kwargs.get("get_pty")
         return None, _FakeStream(self.chan), _FakeStream(self.chan)
 
     def invoke_shell(self, *args, **kwargs):
@@ -132,6 +161,65 @@ def test_run_command_passes_command_and_returns_remote_status(
     assert client.command == "ls -l /"
     assert client.closed is True
     assert "hello" in capfd.readouterr().out
+
+
+def test_run_command_requests_pty_when_both_stdio_are_ttys(
+    keys_root: Path, monkeypatch, capfd
+) -> None:
+    chan = _FakeChannel(out=b"$ ", err=b"", status=0)
+    client = _FakeClient(chan)
+    monkeypatch.setattr(ssh, "_connect", lambda *a, **k: client)
+    monkeypatch.setattr(ssh, "_stdio_is_tty", lambda: True)
+    monkeypatch.setattr(ssh.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(ssh.sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(ssh.termios, "tcgetattr", lambda _fd: ["attr"])
+    monkeypatch.setattr(ssh.termios, "tcsetattr", lambda *args: None)
+    monkeypatch.setattr(ssh.tty, "setraw", lambda _fd: None)
+    monkeypatch.setattr(ssh.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(ssh, "_sync_window_size", lambda _chan: None)
+    monkeypatch.setattr(
+        ssh.select, "select", lambda r, w, x, t: ([99], [], [])
+    )
+
+    rc = ssh.run_command("vm1", "10.0.0.5", "cliff", Path("/k"), "bash")
+
+    assert rc == 0
+    assert client.get_pty is True
+    assert "$ " in capfd.readouterr().out
+
+
+def test_run_command_pty_forwards_stdin_until_local_eof(
+    keys_root: Path, monkeypatch
+) -> None:
+    # hold_exit=2：前两轮即使输出排空也保持“远端未退出”，
+    # 确保 stdin 转发与本地 EOF 分支都能被执行到。
+    chan = _FakeChannel(out=b"$ ", status=0, hold_exit=2)
+    client = _FakeClient(chan)
+    monkeypatch.setattr(ssh, "_connect", lambda *a, **k: client)
+    monkeypatch.setattr(ssh, "_stdio_is_tty", lambda: True)
+    monkeypatch.setattr(ssh.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(ssh.sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(ssh.termios, "tcgetattr", lambda _fd: ["attr"])
+    monkeypatch.setattr(ssh.termios, "tcsetattr", lambda *args: None)
+    monkeypatch.setattr(ssh.tty, "setraw", lambda _fd: None)
+    monkeypatch.setattr(ssh.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(ssh, "_sync_window_size", lambda _chan: None)
+    select_results = iter(([99, 0], [0]))
+    monkeypatch.setattr(
+        ssh.select,
+        "select",
+        lambda r, w, x, t: (next(select_results), [], []),
+    )
+    inputs = iter((b"echo hi\n", b""))
+    monkeypatch.setattr(ssh.os, "read", lambda _fd, _n: next(inputs))
+
+    rc = ssh.run_command("vm1", "10.0.0.5", "cliff", Path("/k"), "bash")
+
+    assert rc == 0
+    assert client.get_pty is True
+    assert chan.sent == b"echo hi\n"
+    assert chan.timeouts == [None, 0.0]
+    assert chan.write_shut_down is True
 
 
 def test_interactive_shell_returns_remote_exit_status(

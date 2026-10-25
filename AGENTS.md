@@ -73,7 +73,9 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 - shell/exec：从域 XML 读 `ssh-user` → libvirt 实测 IPv4
   （lease→agent→arp，见 hv/network.py）→ 用 `keys/<名称>` 私钥经 paramiko
   建立交互 shell 或执行命令；exit code 透传。`shell` 与 `exec` 在实例关机时
-  都先复用 `lifecycle.start_instance` 自动启动，再等待 IP 就绪。
+  都先复用 `lifecycle.start_instance` 自动启动，再等待 IP 就绪。本地
+  stdin/stdout 均为 TTY 时 `exec` 申请 PTY 并双向转发（`exec <实例> -- bash`
+  可用），重定向/管道场景不分配 PTY。
 - 连接统一为 `qemu:///system`；用户需在 libvirt/kvm 组。
 - 所有面向用户的输出（help、print、警告、错误、表头、状态名）均为英文。
 
@@ -114,3 +116,6 @@ README（中英双语）、三个 .conf 示例与本文件。
 - paramiko 5.x 的 `Ed25519Key` 无 `generate()`：`ssh._generate_key` 用
   `getattr(..., "generate", None)` 探测，缺失时回退 `RSAKey.generate(3072)`。
 - `virDomainInterfaceAddresses` 支持 SRC_LEASE / SRC_AGENT / SRC_ARP 三类来源。
+- `ssh.run_command` 的 TTY 分支必须保留 `exec_command()` 返回的 stdin/stderr
+  文件对象：只取 stdout 会让 stdin 文件被 GC 并触发 `shutdown_write()`，
+  通道立即 EOF，交互式命令卡死。

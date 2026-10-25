@@ -94,7 +94,7 @@ uv run kvmci destroy rocky-llm
 | `list` | Configured instances plus any unregistered libvirt domains, with live state. |
 | `templates` | List templates from `templates.conf`. |
 | `shell <name>` | Open an interactive SSH session. Starts the instance first if it is shut off, then waits for an IPv4 address. Uses the instance's private key and the **actual** IPv4 address discovered from libvirt (DHCP lease → qemu-guest-agent → ARP), never the address declared in `network-config`. |
-| `exec <name> -- <command>` | Run one command non-interactively over SSH; starts the instance first if it is shut off. Everything after `--` is joined and passed to the remote shell; stdout/stderr are streamed and the remote exit status becomes the `kvmci` exit code. |
+| `exec <name> -- <command>` | Run one command over SSH; starts the instance first if it is shut off. Everything after `--` is joined and passed to the remote shell; stdout/stderr are streamed and the remote exit status becomes the `kvmci` exit code. When local stdin and stdout are both terminals (e.g. `exec <name> -- bash`) a PTY is allocated and forwarded bidirectionally; redirects and pipes keep the non-PTY streaming path. |
 
 ### Waiting for cloud-init
 
@@ -337,7 +337,7 @@ uv run kvmci destroy rocky-llm
 | `list` | 列出已登记实例与未登记的 libvirt 域及实时状态 |
 | `templates` | 列出 `templates.conf` 中定义的模板 |
 | `shell <名称>` | 打开 SSH 交互式登录会话；实例已关机时先自动启动并等待 IPv4 就绪。使用实例私钥与 libvirt 实测 IPv4 地址（DHCP 租约 → qemu-guest-agent → ARP 依次回退），绝不信任 `network-config` 中声明的地址 |
-| `exec <名称> -- <命令>` | 非交互执行一条命令；实例已关机时先自动启动并等待 IPv4 就绪。`--` 之后的所有参数拼接后交给远端 shell，实时透传 stdout/stderr，远端退出码即 `kvmci` 退出码 |
+| `exec <名称> -- <命令>` | 执行一条命令；实例已关机时先自动启动并等待 IPv4 就绪。`--` 之后的所有参数拼接后交给远端 shell，实时透传 stdout/stderr，远端退出码即 `kvmci` 退出码。本地 stdin 与 stdout 均为终端时（如 `exec <名称> -- bash`）申请 PTY 并双向转发，交互式程序可正常使用；重定向或管道仍走无 PTY 的流式路径 |
 
 ### 等待 cloud-init
 
