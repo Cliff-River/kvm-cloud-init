@@ -313,68 +313,130 @@ def test_download_progress_plain_shows_current_and_total() -> None:
     assert "4.0 MiB / 4.0 MiB (100%)" in text
 
 
-def test_download_progress_tty_renders_single_line_bar(monkeypatch) -> None:
-    monkeypatch.setattr(images, "_terminal_columns", lambda stream: 80)
+def test_download_progress_tty_renders_rich_bar(monkeypatch) -> None:
+    _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
     progress = images.DownloadProgress("base", stream=stream)
     progress.update(0, 4 * 1024 * 1024)
+    progress._progress.refresh()
+    first = stream.getvalue()
+    assert "Downloading base" in first
+    assert "0.0/4.2 MB" in first
+    # rich 的就地刷新控制序列
+    assert "\x1b[2K" in first
+
     progress.update(4 * 1024 * 1024, 4 * 1024 * 1024)
     progress.close()
-    text = stream.getvalue()
-    assert "Downloading base" in text
-    assert "[" in text and "#" in text
-    assert "0.0 MiB / 4.0 MiB 0%" in text
-    assert "4.0 MiB / 4.0 MiB 100%" in text
+    assert "4.2/4.2 MB" in stream.getvalue()[len(first):]
 
 
 def test_download_progress_unknown_total_avoids_question_mark(monkeypatch) -> None:
-    monkeypatch.setattr(images, "_terminal_columns", lambda stream: 80)
+    _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
     progress = images.DownloadProgress("base", stream=stream)
     progress.update(0, None)
-    # 绕过 0.1 秒的刷新节流，验证总量未知时的后续渲染
-    progress._last_render = 0.0
     progress.update(1024 * 1024, None)
+    progress._progress.refresh()
     progress.close()
     text = stream.getvalue()
     assert "? MB" not in text
-    assert "1.0 MiB" in text
+    assert "1.0 MB" in text
 
 
 def test_download_progress_close_keeps_current_progress(monkeypatch) -> None:
-    monkeypatch.setattr(images, "_terminal_columns", lambda stream: 80)
-    stream = _TtyStream()
-    progress = images.DownloadProgress("base", stream=stream)
-    progress.update(1024 * 1024, 4 * 1024 * 1024)
-    progress.close()
-    text = stream.getvalue()
-    assert "25%" in text
-    assert "100%" not in text
-
-
-def test_download_progress_resize_clears_reflowed_rows(monkeypatch) -> None:
-    columns = 80
-    monkeypatch.setattr(images, "_terminal_columns", lambda stream: columns)
+    _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
     progress = images.DownloadProgress("base", stream=stream)
     progress.update(0, 4 * 1024 * 1024)
-    rendered = stream.getvalue()
-    assert "\x1b[1A" not in rendered
+    progress.update(1024 * 1024, 4 * 1024 * 1024)
+    progress.close()
+    text = stream.getvalue()
+    # 最终一帧停在 25%（1.0/4.2 MB），没有被补满
+    assert "1.0/4.2 MB" in text
+    assert "4.2/4.2 MB" not in text
 
-    columns = 20
-    progress._on_resize(0, None)
-    after = stream.getvalue()[len(rendered):]
+
+def test_download_progress_resize_clears_reflowed_rows(monkeypatch) -> None:
+    width = _patch_console_width(monkeypatch, 80)
+    stream = _TtyStream()
+    progress = images.DownloadProgress("base", stream=stream)
+    progress.update(0, 100 * 1024 * 1024)
+    progress._progress.refresh()
+    first = stream.getvalue()
+    # 80 列时只有一行，rich 正常定位不需要上移
+    assert "\x1b[1A" not in first
+
+    width["value"] = 20
+    progress.update(50 * 1024 * 1024, 100 * 1024 * 1024)
+    progress._progress.refresh()
+    after = stream.getvalue()[len(first):]
+    # 缩窄后 reflow 成多行，自定义 Live 逐行清除旧快照
     assert "\x1b[1A" in after
-    assert after.count("\x1b[1A") >= 1
     progress.close()
 
 
+def test_resize_aware_live_erases_reflow_rows(monkeypatch) -> None:
+    width = _patch_console_width(monkeypatch, 80)
+    stream = _TtyStream()
+    console = images.Console(file=stream)
+    live = images._ResizeAwareLive(
+        get_renderable=lambda: "x" * 70,
+        console=console,
+        auto_refresh=False,
+    )
+    live.start(refresh=True)
+    assert "\x1b[1A" not in stream.getvalue()
+
+    width["value"] = 20  # 70 列内容 reflow 成 4 个视觉行
+    first = stream.getvalue()
+    live.refresh()
+    second = stream.getvalue()[len(first):]
+    # 4 个视觉行：先清当前行再上移 3 次，不能有第 4 次上移抹到上方保留行
+    assert second.count("\x1b[1A") == 3
+    live.stop()
+
+
+def test_resize_aware_live_widening_keeps_native_positioning(monkeypatch) -> None:
+    width = _patch_console_width(monkeypatch, 20)
+    stream = _TtyStream()
+    console = images.Console(file=stream)
+    live = images._ResizeAwareLive(
+        get_renderable=lambda: "x" * 70,
+        console=console,
+        auto_refresh=False,
+    )
+    live.start(refresh=True)  # 20 列时占 4 行
+    first = stream.getvalue()
+
+    width["value"] = 80  # 变宽：显式换行不会被合并，rich 原生定位即正确
+    live.refresh()
+    second = stream.getvalue()[len(first):]
+    # 只应有原生的 height-1=3 次上移，不是 hook 的 4 次
+    assert second.count("\x1b[1A") == 3
+    live.stop()
+
+
 def test_download_progress_close_is_idempotent(monkeypatch) -> None:
-    monkeypatch.setattr(images, "_terminal_columns", lambda stream: 80)
+    _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
     progress = images.DownloadProgress("base", stream=stream)
     progress.update(0, 1024)
     progress.close()
+    assert progress._progress is None
     progress.close()
     progress.update(1024, 1024)
-    assert stream.getvalue().count("Downloading base:") == 1
+
+
+def _patch_console_width(monkeypatch, columns: int) -> dict[str, int]:
+    """让 rich Console.size 返回可变宽度，并模拟正常终端环境。"""
+    from rich.console import Console as RichConsole
+    from rich.console import ConsoleDimensions
+
+    monkeypatch.setenv("TERM", "xterm-256color")
+    width = {"value": columns}
+    monkeypatch.setattr(
+        RichConsole,
+        "size",
+        property(lambda self: ConsoleDimensions(width["value"], 24)),
+    )
+    return width

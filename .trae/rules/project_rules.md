@@ -39,7 +39,7 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 ## 硬性约定
 
 1. 所有实例操作只连接 `qemu:///system`，禁止 `qemu:///session`。
-2. 优先使用 Python 库（libvirt-python、pycdlib、PyYAML、httpx、parsel、标准库），
+2. 优先使用 Python 库（libvirt-python、pycdlib、PyYAML、httpx、parsel、rich、标准库），
    不新增 subprocess 调用；`hv/storage.py` 的 `sudo -n rm` 是已论证的最后兜底。
 3. 不解析 CLI 输出：libvirt XML 用 `xml.etree`，容量信息用 qcow2 头，
    禁止用正则抠 XML/JSON。
