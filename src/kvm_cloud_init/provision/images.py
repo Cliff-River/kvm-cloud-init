@@ -4,25 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import signal
 import sys
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
-
-from rich import filesize
-from rich import progress as rich_progress
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    TaskID,
-    TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
-from rich.text import Text
 
 from .. import catalog, imagefetch
 from ..config import ConfigStore, ImageSource
@@ -411,24 +400,18 @@ def _timestamp() -> str:
 
 
 PROGRESS_INTERVAL = 5.0
-
-
-class _DownloadSizeColumn(DownloadColumn):
-    """总量未知时只显示已下载字节，避免 rich 默认渲染出 ``? MB``。"""
-
-    def render(self, task: rich_progress.Task) -> Text:
-        if task.total is None:
-            return Text(
-                filesize.decimal(int(task.completed)), style="progress.download"
-            )
-        return super().render(task)
+#: TTY 进度条的最小刷新间隔（秒），避免逐字节重绘拖慢下载
+RENDER_INTERVAL = 0.1
 
 
 class DownloadProgress:
     """下载进度输出。
 
-    交互式终端（TTY）用 rich 渲染进度条、已下载/总量、速度与剩余时间；
-    非 TTY（重定向、CI）降级为每 5 秒追加一行 ``current/total`` 文本。
+    交互式终端（TTY）用 ``\\r`` + 清行在原地重绘单行进度条；非 TTY
+    （重定向、CI）降级为每 5 秒追加一行 ``current/total`` 文本。
+
+    终端缩放会触发 SIGWINCH：多行进度渲染会留下重排快照，
+    这里在信号处理里按新宽度估算重排后的行数，逐行清除后再重绘。
     """
 
     def __init__(self, label: str, *, stream: TextIO | None = None) -> None:
@@ -440,46 +423,153 @@ class DownloadProgress:
         self._reported = False
         self._last_report = 0.0
         self._closed = False
-        self._progress: rich_progress.Progress | None = None
-        self._task_id: TaskID | None = None
+        self._started = time.monotonic()
+        self._last_render = 0.0
+        self._rendered = False
+        self._last_length = 0
+        self._previous_winch: object | None = None
+        self._winch_installed = False
+        if self._interactive:
+            self._install_resize_handler()
 
     def update(self, done: int, total: int | None) -> None:
         if self._closed:
             return
         self._done = done
         self._total = total
+        if done == 0:
+            # 每次重试从头计数时重置速度/ETA 的基准时间
+            self._started = time.monotonic()
         if self._interactive:
-            self._render_rich(done, total)
+            finished = total is not None and done >= total
+            self._render(force=finished)
         else:
             self._render_plain(done, total)
 
     def close(self) -> None:
+        """结束进度输出：保留当前进度，不把它补到总量。"""
         if self._closed:
             return
         self._closed = True
-        if self._progress is not None:
-            if self._total is not None:
-                self._progress.update(self._task_id, completed=self._total)
-            self._progress.stop()
-            self._progress = None
+        self._restore_resize_handler()
+        if self._rendered:
+            # 换行让后续输出另起一行；进度条本身停留在最后一次渲染的位置
+            self._stream.write("\n")
+            self._stream.flush()
 
-    def _render_rich(self, done: int, total: int | None) -> None:
-        if self._progress is None:
-            self._progress = rich_progress.Progress(
-                TextColumn("[bold]{task.description}"),
-                BarColumn(bar_width=None),
-                _DownloadSizeColumn(),
-                TransferSpeedColumn(),
-                TimeRemainingColumn(),
-                console=Console(file=self._stream),
-                transient=False,
-            )
-            self._progress.start()
-            self._task_id = self._progress.add_task(
-                f"Downloading {self._label}", total=total
-            )
+    # ---- TTY 渲染 ---------------------------------------------------------- #
+
+    def _install_resize_handler(self) -> None:
+        if not hasattr(signal, "SIGWINCH"):
             return
-        self._progress.update(self._task_id, completed=done, total=total)
+        try:
+            self._previous_winch = signal.getsignal(signal.SIGWINCH)
+            signal.signal(signal.SIGWINCH, self._on_resize)
+        except (ValueError, OSError):
+            # 非主线程无法注册信号处理器，退化为只在 update 时重绘
+            return
+        self._winch_installed = True
+
+    def _restore_resize_handler(self) -> None:
+        if not self._winch_installed:
+            return
+        self._winch_installed = False
+        try:
+            signal.signal(signal.SIGWINCH, self._previous_winch or signal.SIG_DFL)
+        except (ValueError, OSError, TypeError):
+            pass
+
+    def _on_resize(self, signum: int, frame: object) -> None:
+        if not self._rendered:
+            return
+        columns = _terminal_columns(self._stream)
+        # 终端已按新宽度重排现有内容，需清掉全部重排行后重绘
+        self._erase_rows(_visual_rows(self._last_length, columns))
+        self._render(force=True)
+
+    def _erase_rows(self, rows: int) -> None:
+        chunks = ["\r\x1b[2K"]
+        chunks.extend("\x1b[1A\r\x1b[2K" for _ in range(max(rows - 1, 0)))
+        self._stream.write("".join(chunks))
+        self._stream.flush()
+
+    def _render(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_render < RENDER_INTERVAL:
+            return
+        self._last_render = now
+        columns = _terminal_columns(self._stream)
+        line = self._compose(max(columns - 1, 1))
+        self._last_length = len(line)
+        self._stream.write("\r\x1b[2K" + line)
+        self._stream.flush()
+        self._rendered = True
+
+    def _compose(self, width: int) -> str:
+        """按终端宽度拼一行：空间不足时依次舍弃 ETA、速度与进度条。"""
+        done = self._done
+        total = self._total
+        head = [f"Downloading {self._label}:"]
+        head.append(
+            _fmt_size(done) if total is None
+            else f"{_fmt_size(done)} / {_fmt_size(total)}"
+        )
+        if total:
+            head.append(f"{done * 100 // total}%")
+        head_text = " ".join(head)
+        extras = [
+            value
+            for value in (self._speed_text(done, total), self._eta_text(done, total))
+            if value
+        ]
+        extras_text = " ".join(extras)
+
+        def bar_size(extra_len: int) -> int:
+            # head 与进度条之间 1 个空格，尾部字段前再加 1 个空格
+            reserved = len(head_text) + 1 + (1 + extra_len if extra_len else 0)
+            return width - reserved
+
+        while extras and bar_size(len(extras_text)) < 8:
+            extras.pop()
+            extras_text = " ".join(extras)
+        size = bar_size(len(extras_text))
+        if size < 8:
+            # 实在太窄就只留文字，不再画进度条
+            return (head_text + (f" {extras_text}" if extras_text else ""))[:width]
+        line = f"{head_text} {self._bar(max(size - 2, 1))}"
+        if extras_text:
+            line += f" {extras_text}"
+        return line[:width]
+
+    def _bar(self, inner: int) -> str:
+        total = self._total
+        if not total:
+            # 总量未知时显示来回移动的脉冲，而不是假的百分比
+            position = int((time.monotonic() - self._started) * 8) % max(inner, 1)
+            cells = ["-"] * inner
+            cells[position] = "#"
+            return "[" + "".join(cells) + "]"
+        filled = min(inner, max(int(self._done / total * inner), 0))
+        return "[" + "#" * filled + "-" * (inner - filled) + "]"
+
+    def _speed_text(self, done: int, total: int | None) -> str:
+        if total is None and done == 0:
+            return ""
+        elapsed = time.monotonic() - self._started
+        if elapsed <= 0:
+            return ""
+        return f"{_fmt_size(int(done / elapsed))}/s"
+
+    def _eta_text(self, done: int, total: int | None) -> str:
+        if total is None or done >= total:
+            return ""
+        elapsed = time.monotonic() - self._started
+        if elapsed <= 0 or done <= 0:
+            return ""
+        remaining = (total - done) / (done / elapsed)
+        return f"ETA {_fmt_duration(remaining)}"
+
+    # ---- 非 TTY 渲染 ------------------------------------------------------- #
 
     def _render_plain(self, done: int, total: int | None) -> None:
         finished = total is not None and done >= total
@@ -507,6 +597,31 @@ def progress_printer(label: str) -> Progress:
     return DownloadProgress(label)
 
 
+def _terminal_columns(stream: TextIO) -> int:
+    """取当前终端宽度；无法查询时回退到 80。"""
+    try:
+        return os.get_terminal_size(stream.fileno()).columns
+    except (AttributeError, OSError, ValueError):
+        return shutil.get_terminal_size((80, 24)).columns
+
+
+def _visual_rows(length: int, columns: int) -> int:
+    """按终端宽度估算一段文本软换行后的行数。"""
+    width = max(columns, 1)
+    return max(1, (length + width - 1) // width)
+
+
 def _fmt_size(size: int) -> str:
     mib = size / (1024 * 1024)
     return f"{mib:.1f} MiB"
+
+
+def _fmt_duration(seconds: float) -> str:
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    minutes, remaining = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m{remaining:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"

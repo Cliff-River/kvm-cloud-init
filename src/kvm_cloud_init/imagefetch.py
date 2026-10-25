@@ -471,6 +471,10 @@ def download(
                 except (httpx.HTTPError, OSError) as exc:
                     failures.append(f"{url} ({_describe(exc)})")
                     _unlink(part_path)
+                except KeyboardInterrupt:
+                    # Ctrl+C 取消时清掉半成品，正式镜像始终保持不变
+                    _unlink(part_path)
+                    raise
                 if attempt + 1 < RETRIES:
                     sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
         raise ImageFetchError(

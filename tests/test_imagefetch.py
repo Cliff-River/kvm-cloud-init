@@ -331,6 +331,35 @@ def test_download_fails_without_free_space(tmp_path: Path) -> None:
     assert not (tmp_path / ".x.qcow2.part").exists()
 
 
+def test_download_keyboard_interrupt_removes_part(tmp_path: Path) -> None:
+    class _InterruptingStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"first chunk"
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            pass
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=_InterruptingStream(), request=request
+        )
+
+    part = tmp_path / ".x.qcow2.part"
+    progress = _Recorder()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(KeyboardInterrupt):
+        imagefetch.download(
+            _target("https://x/x.qcow2"),
+            part,
+            client=client,
+            progress=progress,
+            sleep=_no_sleep,
+        )
+    assert not part.exists()
+    assert progress.closed
+
+
 # ---- 状态文件 ----
 
 

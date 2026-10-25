@@ -313,25 +313,65 @@ def test_download_progress_plain_shows_current_and_total() -> None:
     assert "4.0 MiB / 4.0 MiB (100%)" in text
 
 
-def test_download_progress_rich_renders_bar_on_tty() -> None:
+def test_download_progress_tty_renders_single_line_bar(monkeypatch) -> None:
+    monkeypatch.setattr(images, "_terminal_columns", lambda stream: 80)
     stream = _TtyStream()
     progress = images.DownloadProgress("base", stream=stream)
     progress.update(0, 4 * 1024 * 1024)
     progress.update(4 * 1024 * 1024, 4 * 1024 * 1024)
     progress.close()
-    assert "Downloading base" in stream.getvalue()
+    text = stream.getvalue()
+    assert "Downloading base" in text
+    assert "[" in text and "#" in text
+    assert "0.0 MiB / 4.0 MiB 0%" in text
+    assert "4.0 MiB / 4.0 MiB 100%" in text
 
 
-def test_download_progress_unknown_total_avoids_question_mark() -> None:
+def test_download_progress_unknown_total_avoids_question_mark(monkeypatch) -> None:
+    monkeypatch.setattr(images, "_terminal_columns", lambda stream: 80)
     stream = _TtyStream()
     progress = images.DownloadProgress("base", stream=stream)
+    progress.update(0, None)
+    # 绕过 0.1 秒的刷新节流，验证总量未知时的后续渲染
+    progress._last_render = 0.0
     progress.update(1024 * 1024, None)
     progress.close()
-    assert "? MB" not in stream.getvalue()
+    text = stream.getvalue()
+    assert "? MB" not in text
+    assert "1.0 MiB" in text
 
 
-def test_download_progress_close_is_idempotent() -> None:
-    stream = io.StringIO()
+def test_download_progress_close_keeps_current_progress(monkeypatch) -> None:
+    monkeypatch.setattr(images, "_terminal_columns", lambda stream: 80)
+    stream = _TtyStream()
+    progress = images.DownloadProgress("base", stream=stream)
+    progress.update(1024 * 1024, 4 * 1024 * 1024)
+    progress.close()
+    text = stream.getvalue()
+    assert "25%" in text
+    assert "100%" not in text
+
+
+def test_download_progress_resize_clears_reflowed_rows(monkeypatch) -> None:
+    columns = 80
+    monkeypatch.setattr(images, "_terminal_columns", lambda stream: columns)
+    stream = _TtyStream()
+    progress = images.DownloadProgress("base", stream=stream)
+    progress.update(0, 4 * 1024 * 1024)
+    rendered = stream.getvalue()
+    assert "\x1b[1A" not in rendered
+
+    columns = 20
+    progress._on_resize(0, None)
+    after = stream.getvalue()[len(rendered):]
+    assert "\x1b[1A" in after
+    assert after.count("\x1b[1A") >= 1
+    progress.close()
+
+
+def test_download_progress_close_is_idempotent(monkeypatch) -> None:
+    monkeypatch.setattr(images, "_terminal_columns", lambda stream: 80)
+    stream = _TtyStream()
     progress = images.DownloadProgress("base", stream=stream)
     progress.update(0, 1024)
     progress.close()

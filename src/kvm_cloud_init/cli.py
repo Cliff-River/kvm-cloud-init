@@ -293,6 +293,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
+    except KeyboardInterrupt:
+        print("Operation cancelled.", file=sys.stderr)
+        return 130
     except KciError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

@@ -143,11 +143,13 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 - `virDomainInterfaceAddresses` 支持 SRC_LEASE / SRC_AGENT / SRC_ARP 三类来源。
 - `imagefetch.py` 的 HTTP 客户端可注入：测试用
   `httpx.Client(transport=httpx.MockTransport(handler))`，不建立真实连接。
-- 下载进度由 `provision/images.DownloadProgress` 提供：TTY 用 rich 渲染
-  进度条（已下载/总量、速度、ETA），非 TTY 每 5 秒追加 `current / total` 行；
-  下载结束由 `imagefetch.download` 统一 `close()`。AlmaLinux 等源用 chunked
-  GET（无 Content-Length），`_remote_size` 会用 HEAD 补总大小；HEAD 不可用时
-  只显示已下载字节，不出现 `? MB`。
+- 下载进度由 `provision/images.DownloadProgress` 提供：TTY 用单行
+  `\r` + 清行就地重绘（已下载/总量、速度、ETA），SIGWINCH 时按新宽度
+  清除重排快照后再重绘；非 TTY 每 5 秒追加 `current / total` 行；
+  下载结束由 `imagefetch.download` 统一 `close()`，`close()` 不会把进度补满。
+  AlmaLinux 等源用 chunked GET（无 Content-Length），`_remote_size` 会用 HEAD
+  补总大小；HEAD 不可用时只显示已下载字节，不出现 `? MB`。Ctrl+C 由
+  `cli.main` 捕获，删除 `.part` 后输出 `Operation cancelled.` 并退出 130。
 - `ssh.run_command` 的 TTY 分支必须保留 `exec_command()` 返回的 stdin/stderr
   文件对象：只取 stdout 会让 stdin 文件被 GC 并触发 `shutdown_write()`，
   通道立即 EOF，交互式命令卡死。

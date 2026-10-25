@@ -187,6 +187,18 @@ def test_bad_args() -> None:
     assert exc.value.code == 2
 
 
+def test_keyboard_interrupt_reports_cancelled(monkeypatch, capsys) -> None:
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(cli.provision, "list_instances", interrupted)
+
+    assert cli.main(["list"]) == 130
+    captured = capsys.readouterr()
+    assert "Operation cancelled." in captured.err
+
+
 def test_shell_dispatch(monkeypatch) -> None:
     calls = {}
     monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
