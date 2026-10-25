@@ -80,6 +80,25 @@ def test_almalinux_match_accepts_optional_build_number() -> None:
         assert re.search(by_id[image_id].match, name)
 
 
+def test_rocky_match_accepts_base_and_lvm_names() -> None:
+    samples = {
+        "rocky-9": "Rocky-9-GenericCloud-Base-9.8-20260525.0.x86_64.qcow2",
+        "rocky-9-lvm": "Rocky-9-GenericCloud-LVM-9.8-20260525.0.x86_64.qcow2",
+        "rocky-10": "Rocky-10-GenericCloud-Base-10.2-20260525.0.x86_64.qcow2",
+        "rocky-10-lvm": "Rocky-10-GenericCloud-LVM-10.2-20260525.0.x86_64.qcow2",
+    }
+    by_id = {item.id: item for item in catalog.PRESET}
+    for image_id, name in samples.items():
+        assert re.search(by_id[image_id].match, name), image_id
+    # base 条目不能误匹配 LVM，也不能匹配 .latest 滚动别名
+    assert not re.search(
+        by_id["rocky-9"].match, "Rocky-9-GenericCloud-LVM-9.8-20260525.0.x86_64.qcow2"
+    )
+    assert not re.search(
+        by_id["rocky-9"].match, "Rocky-9-GenericCloud-Base.latest.x86_64.qcow2"
+    )
+
+
 def test_render_is_deterministic() -> None:
     first = catalog.render_catalog()
     second = catalog.render_catalog()

@@ -72,16 +72,21 @@ def _almalinux(version: str) -> PresetEntry:
 
 
 def _rocky(version: str, variant: str) -> PresetEntry:
-    suffix = "" if variant == "base" else f"-{variant.upper()}"
-    stem = f"Rocky-{version}-GenericCloud{suffix}"
+    # 上游 base 变体文件名带 -Base 段（Rocky-9-GenericCloud-Base-9.8-...），
+    # LVM 不带；本地卷名沿用不带变体段的短名。
+    remote_variant = "Base" if variant == "base" else variant.upper()
+    remote = f"Rocky-{version}-GenericCloud-{remote_variant}"
+    local = f"Rocky-{version}-GenericCloud" + (
+        "" if variant == "base" else f"-{remote_variant}"
+    )
     return PresetEntry(
         id=f"rocky-{version}" + ("" if variant == "base" else f"-{variant}"),
-        file=f"{stem}.x86_64.qcow2",
+        file=f"{local}.x86_64.qcow2",
         kind="index",
         pages=(
             f"https://download.rockylinux.org/pub/rocky/{version}/images/x86_64/",
         ),
-        match=rf"{stem}-\d+\.\d+-\d{{8}}\.\d+\.x86_64\.qcow2$",
+        match=rf"{remote}-\d+\.\d+-\d{{8}}\.\d+\.x86_64\.qcow2$",
         checksum_file="CHECKSUM",
         archived=version == "8",
     )
