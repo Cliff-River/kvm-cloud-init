@@ -13,7 +13,8 @@ from ..hv import storage as hv_storage
 from ..hv.client import pool_target_path
 from .cloudinit_wait import wait_cloud_init
 from .guard import ensure_destroy_allowed
-from .images import ensure_image, progress_printer
+from .images import ensure_image
+from .progress import progress_printer
 
 DISK_SUFFIX = ".qcow2"
 SEED_SUFFIX = "-cidata.iso"

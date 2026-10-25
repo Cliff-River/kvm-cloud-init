@@ -32,8 +32,8 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 - `provision/`：业务编排包，按职责拆分：`guard`（保护级别）、`create`（创建 + 等待）、
   `lifecycle`（start/stop/reboot/status/destroy）、`access`（shell/exec）、
   `listing`（list/templates）、`images`（images init/refresh/list/check/pull
-  与 create 的 ensure_image）、`cloudinit_wait`（等待/status/log）；公共 API 由
-  `__init__.py` 导出。
+  与 create 的 ensure_image）、`progress`（终端进度输出：rich 进度条与缩放自愈）、
+  `cloudinit_wait`（等待/status/log）；公共 API 由 `__init__.py` 导出。
 - `errors.py`：所有面向用户的异常，message 必须是可直接展示的英文。
 
 ## 硬性约定

@@ -225,7 +225,11 @@ def _run_images(args: argparse.Namespace) -> int:
         )
         return 2
     return provision.pull_images(
-        store, list(args.ids), all_templates=args.all, force=args.force
+        store,
+        list(args.ids),
+        all_templates=args.all,
+        force=args.force,
+        progress_factory=provision.progress_printer,
     )
 
 

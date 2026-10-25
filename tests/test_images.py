@@ -7,11 +7,13 @@ import io
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 from kvm_cloud_init import catalog, imagefetch
 from kvm_cloud_init.config import ConfigStore
 from kvm_cloud_init.errors import ConfigError, ImageFetchError, ImageNotFound
 from kvm_cloud_init.provision import images
+from kvm_cloud_init.provision.progress import DownloadProgress, _ResizeAwareLive
 
 
 def _target(name: str = "base.qcow2") -> imagefetch.RemoteTarget:
@@ -302,7 +304,7 @@ class _TtyStream(io.StringIO):
 
 def test_download_progress_plain_shows_current_and_total() -> None:
     stream = io.StringIO()
-    progress = images.DownloadProgress("base", stream=stream)
+    progress = DownloadProgress("base", stream=stream)
     progress.update(0, None)
     progress.update(0, 4 * 1024 * 1024)
     progress.update(2 * 1024 * 1024, 4 * 1024 * 1024)
@@ -316,7 +318,7 @@ def test_download_progress_plain_shows_current_and_total() -> None:
 def test_download_progress_tty_renders_rich_bar(monkeypatch) -> None:
     _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
-    progress = images.DownloadProgress("base", stream=stream)
+    progress = DownloadProgress("base", stream=stream)
     progress.update(0, 4 * 1024 * 1024)
     progress._progress.refresh()
     first = stream.getvalue()
@@ -333,7 +335,7 @@ def test_download_progress_tty_renders_rich_bar(monkeypatch) -> None:
 def test_download_progress_unknown_total_avoids_question_mark(monkeypatch) -> None:
     _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
-    progress = images.DownloadProgress("base", stream=stream)
+    progress = DownloadProgress("base", stream=stream)
     progress.update(0, None)
     progress.update(1024 * 1024, None)
     progress._progress.refresh()
@@ -346,7 +348,7 @@ def test_download_progress_unknown_total_avoids_question_mark(monkeypatch) -> No
 def test_download_progress_close_keeps_current_progress(monkeypatch) -> None:
     _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
-    progress = images.DownloadProgress("base", stream=stream)
+    progress = DownloadProgress("base", stream=stream)
     progress.update(0, 4 * 1024 * 1024)
     progress.update(1024 * 1024, 4 * 1024 * 1024)
     progress.close()
@@ -359,7 +361,7 @@ def test_download_progress_close_keeps_current_progress(monkeypatch) -> None:
 def test_download_progress_resize_clears_reflowed_rows(monkeypatch) -> None:
     width = _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
-    progress = images.DownloadProgress("base", stream=stream)
+    progress = DownloadProgress("base", stream=stream)
     progress.update(0, 100 * 1024 * 1024)
     progress._progress.refresh()
     first = stream.getvalue()
@@ -378,8 +380,8 @@ def test_download_progress_resize_clears_reflowed_rows(monkeypatch) -> None:
 def test_resize_aware_live_erases_reflow_rows(monkeypatch) -> None:
     width = _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
-    console = images.Console(file=stream)
-    live = images._ResizeAwareLive(
+    console = Console(file=stream)
+    live = _ResizeAwareLive(
         get_renderable=lambda: "x" * 70,
         console=console,
         auto_refresh=False,
@@ -399,8 +401,8 @@ def test_resize_aware_live_erases_reflow_rows(monkeypatch) -> None:
 def test_resize_aware_live_widening_keeps_native_positioning(monkeypatch) -> None:
     width = _patch_console_width(monkeypatch, 20)
     stream = _TtyStream()
-    console = images.Console(file=stream)
-    live = images._ResizeAwareLive(
+    console = Console(file=stream)
+    live = _ResizeAwareLive(
         get_renderable=lambda: "x" * 70,
         console=console,
         auto_refresh=False,
@@ -419,7 +421,7 @@ def test_resize_aware_live_widening_keeps_native_positioning(monkeypatch) -> Non
 def test_download_progress_close_is_idempotent(monkeypatch) -> None:
     _patch_console_width(monkeypatch, 80)
     stream = _TtyStream()
-    progress = images.DownloadProgress("base", stream=stream)
+    progress = DownloadProgress("base", stream=stream)
     progress.update(0, 1024)
     progress.close()
     assert progress._progress is None

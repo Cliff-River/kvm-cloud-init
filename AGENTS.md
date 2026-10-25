@@ -41,6 +41,7 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 │   │   ├── access.py           # SSH 目标解析与 shell/exec 编排
 │   │   ├── listing.py          # list / templates
 │   │   ├── images.py           # images init/refresh/list/check/pull + ensure_image
+│   │   ├── progress.py         # 终端进度输出（rich 进度条 + 缩放自愈）
 │   │   └── cloudinit_wait.py   # 等待 cloud-init、status、log [-f]
 │   ├── errors.py               # KciError 体系（英文用户信息）
 │   └── hv/                     # libvirt 交互子包（勿命名为 libvirt）
@@ -143,13 +144,16 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 - `virDomainInterfaceAddresses` 支持 SRC_LEASE / SRC_AGENT / SRC_ARP 三类来源。
 - `imagefetch.py` 的 HTTP 客户端可注入：测试用
   `httpx.Client(transport=httpx.MockTransport(handler))`，不建立真实连接。
-- 下载进度由 `provision/images.DownloadProgress` 提供：TTY 用 rich 渲染
-  （彩条、已下载/总量、速度、ETA），并把 `Progress` 内部的 live 替换为
-  `_ResizeAwareLive` 子类——终端**缩窄**时按旧帧在新宽度下 reflow 的视觉
-  行数逐行相对清除（上移 rows−1 次，多一次会抹掉上方下载提示行），变宽
-  不介入；rich 自动刷新线程 10Hz 出帧，缩放后最迟下一帧自愈，无需自行
-  处理 SIGWINCH。非 TTY 每 5 秒追加 `current / total` 行；下载结束由
-  `imagefetch.download` 统一 `close()`，`close()` 不会把进度补满。
+- 下载进度由 `provision/progress.DownloadProgress` 提供（表现层，与编排解耦）：
+  TTY 用 rich 渲染（彩条、已下载/总量、速度、ETA），并把 `Progress` 内部的
+  live 替换为 `_ResizeAwareLive` 子类——终端**缩窄**时按旧帧在新宽度下
+  reflow 的视觉行数逐行相对清除（上移 rows−1 次，多一次会抹掉上方下载
+  提示行），变宽不介入；rich 自动刷新线程 10Hz 出帧，缩放后最迟下一帧
+  自愈，无需自行处理 SIGWINCH。非 TTY 每 5 秒追加 `current / total` 行；
+  下载结束由 `imagefetch.download` 统一 `close()`，`close()` 不会把进度补满。
+  `provision/images.py` 只依赖 `imagefetch.Progress` 协议、不 import rich；
+  `pull_images` 的 `progress_factory` 默认 `None`，由 `cli` / `create` 显式
+  传入 `progress_printer`（`provision/__init__.py` 导出）。
   AlmaLinux 等源用 chunked GET（无 Content-Length），`_remote_size` 会用 HEAD
   补总大小；HEAD 不可用时 `_DownloadSizeColumn` 只显示已下载字节，
   不出现 `? MB`。Ctrl+C 由 `cli.main` 捕获，删除 `.part` 后输出

@@ -9,6 +9,7 @@
 - ``cloudinit_wait``：等待 cloud-init、状态查询与日志跟随
 - ``listing``：list / templates
 - ``images``：镜像目录 init / refresh / list / check / pull 与自动下载
+- ``progress``：终端进度输出（rich 进度条与缩放自愈）
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from .lifecycle import (
     stop_instance,
 )
 from .listing import list_instances, list_templates
+from .progress import progress_printer
 
 __all__ = [
     "check_images",
@@ -47,6 +49,7 @@ __all__ = [
     "list_images",
     "list_instances",
     "list_templates",
+    "progress_printer",
     "prompt_yes",
     "pull_images",
     "reboot_instance",

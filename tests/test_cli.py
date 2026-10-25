@@ -381,10 +381,23 @@ def test_images_pull_requires_ids_or_all(use_project, capsys) -> None:
 def test_images_pull_dispatch(use_project, monkeypatch) -> None:
     calls = {}
 
-    def fake_pull(store, tokens, *, all_templates=False, force=False):
-        calls.update(tokens=tokens, all_templates=all_templates, force=force)
+    def fake_pull(
+        store, tokens, *, all_templates=False, force=False, progress_factory=None
+    ):
+        calls.update(
+            tokens=tokens,
+            all_templates=all_templates,
+            force=force,
+            progress_factory=progress_factory,
+        )
         return 0
 
     monkeypatch.setattr(cli.provision, "pull_images", fake_pull)
     assert cli.main(["images", "pull", "--all", "--force"]) == 0
-    assert calls == {"tokens": [], "all_templates": True, "force": True}
+    # cli 显式注入进度渲染器，编排层不再硬编码 rich
+    assert calls == {
+        "tokens": [],
+        "all_templates": True,
+        "force": True,
+        "progress_factory": cli.provision.progress_printer,
+    }
