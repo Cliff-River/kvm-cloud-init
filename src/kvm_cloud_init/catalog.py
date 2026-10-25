@@ -66,7 +66,7 @@ def _almalinux(version: str) -> PresetEntry:
         pages=(
             f"https://repo.almalinux.org/almalinux/{version}/cloud/x86_64/images/",
         ),
-        match=rf"{base}-\d+\.\d+-\d{{8}}\.x86_64\.qcow2$",
+        match=rf"{base}-\d+\.\d+-\d{{8}}(?:\.\d+)?\.x86_64\.qcow2$",
         checksum_file="CHECKSUM",
     )
 

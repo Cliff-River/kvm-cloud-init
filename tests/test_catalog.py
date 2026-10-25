@@ -70,6 +70,16 @@ def test_non_archived_match_compiles(entry: catalog.PresetEntry) -> None:
         re.compile(entry.checksum_match)
 
 
+def test_almalinux_match_accepts_optional_build_number() -> None:
+    samples = {
+        "almalinux-10": "AlmaLinux-10-GenericCloud-10.2-20261012.0.x86_64.qcow2",
+        "almalinux-9": "AlmaLinux-9-GenericCloud-9.8-20261005.x86_64.qcow2",
+    }
+    by_id = {item.id: item for item in catalog.PRESET}
+    for image_id, name in samples.items():
+        assert re.search(by_id[image_id].match, name)
+
+
 def test_render_is_deterministic() -> None:
     first = catalog.render_catalog()
     second = catalog.render_catalog()
