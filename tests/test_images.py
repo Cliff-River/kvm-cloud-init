@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import io
+import tarfile
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
-from kvm_cloud_init import catalog, imagefetch
+from kvm_cloud_init import catalog, imagefetch, imagefmt, qcow2
 from kvm_cloud_init.config import ConfigStore
 from kvm_cloud_init.errors import ConfigError, ImageFetchError, ImageNotFound
 from kvm_cloud_init.provision import images
@@ -212,6 +213,102 @@ def test_pull_skips_up_to_date_and_force_redownloads(
     assert images.pull_images(store, ["base"], force=True, progress_factory=lambda name: None) == 0
     assert len(downloaded) == 1
     assert disk.read_bytes() == b"image"
+
+
+# ---- 压缩包解压 + 格式转换 ----
+
+
+def _register_kali(store: ConfigStore) -> None:
+    store.images["kali"] = type(store.images["base"])(
+        id="kali",
+        file="kali.qcow2",
+        kind="url",
+        urls=("https://example.invalid/kali.tar.xz",),
+        checksum_url="https://example.invalid/SHA256SUMS",
+        format="qcow2",
+    )
+
+
+def _kali_target() -> imagefetch.RemoteTarget:
+    return imagefetch.RemoteTarget(
+        filename="kali-linux-2026.3-cloud-genericcloud-amd64.tar.xz",
+        urls=("https://example.invalid/kali.tar.xz",),
+        checksum_url="https://example.invalid/SHA256SUMS",
+        version="2026.3",
+    )
+
+
+def _patch_archive_download(monkeypatch, payload: bytes) -> None:
+    def fake_download(target, part_path, *, algo="sha256", expected=None, **kwargs):
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(part_path, "w:xz") as tf:
+            info = tarfile.TarInfo("disk.raw")
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+        return imagefetch.DownloadResult(checksum="b" * 64, size=len(payload))
+
+    monkeypatch.setattr(images.imagefetch, "download", fake_download)
+
+
+def test_pull_extracts_archive_and_converts_to_declared_format(
+    store: ConfigStore, monkeypatch, capsys
+) -> None:
+    _register_kali(store)
+    _patch_remote(monkeypatch, target=_kali_target(), checksum="b" * 64)
+    raw = b"A" * imagefmt.CLUSTER_SIZE + b"\x00" * imagefmt.CLUSTER_SIZE
+    _patch_archive_download(monkeypatch, raw)
+
+    assert images.pull_images(store, ["kali"]) == 0
+
+    disk = store.image_path("kali")
+    assert imagefmt.detect(disk) == "qcow2"
+    assert qcow2.read_info(str(disk)).virtual_size == len(raw)
+    assert not list(store.image_dir.glob(".kali*")), "临时文件必须清理"
+    state = imagefetch.load_state(store.image_dir)
+    assert state["kali"]["format"] == "qcow2"
+    assert state["kali"]["source_format"] == "raw"
+    assert state["kali"]["transformed"] == "true"
+    assert "Extracting" in capsys.readouterr().out
+
+
+def test_pull_skips_up_to_date_transformed_image(
+    store: ConfigStore, monkeypatch, capsys
+) -> None:
+    _register_kali(store)
+    disk = store.image_path("kali")
+    disk.write_bytes(b"converted")
+    imagefetch.save_state(
+        store.image_dir,
+        {"kali": {"upstream_file": _kali_target().filename, "transformed": "true"}},
+    )
+    _patch_remote(monkeypatch, target=_kali_target(), checksum="b" * 64)
+    downloaded = _patch_download(monkeypatch)
+
+    assert images.pull_images(store, ["kali"]) == 0
+    assert downloaded == []
+    assert "up to date" in capsys.readouterr().out
+
+
+def test_check_compares_upstream_name_for_transformed_image(
+    store: ConfigStore, monkeypatch, capsys
+) -> None:
+    _register_kali(store)
+    store.image_path("kali").write_bytes(b"converted")
+    _patch_remote(monkeypatch, target=_kali_target(), checksum="b" * 64)
+
+    imagefetch.save_state(
+        store.image_dir,
+        {"kali": {"upstream_file": _kali_target().filename, "transformed": "true"}},
+    )
+    assert images.check_images(store, ["kali"]) == 0
+    assert "up to date" in capsys.readouterr().out
+
+    imagefetch.save_state(
+        store.image_dir,
+        {"kali": {"upstream_file": "kali-linux-2025.4-cloud-genericcloud-amd64.tar.xz"}},
+    )
+    assert images.check_images(store, ["kali"]) == 1
+    assert "update available" in capsys.readouterr().out
 
 
 # ---- ensure_image 决策表 ----

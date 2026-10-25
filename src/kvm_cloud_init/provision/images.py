@@ -10,7 +10,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .. import catalog, imagefetch
+from .. import catalog, imagefetch, imagefmt
 from ..config import ConfigStore, ImageSource
 from ..errors import ConfigError, ImageFetchError, ImageNotFound
 
@@ -92,6 +92,7 @@ def _preset_source(entry: catalog.PresetEntry) -> ImageSource:
         checksum_file=entry.checksum_file or None,
         checksum_match=entry.checksum_match or None,
         checksum_algo=entry.checksum_algo,
+        format=entry.format or None,
         archived=entry.archived,
         arch=entry.arch,
     )
@@ -166,6 +167,16 @@ def check_images(
         if expected is None:
             print(f"{image_id}: unknown (no checksum; local {local_version})")
             continue
+        if _transformed(source, target, state):
+            if _state_value(state, image_id, "upstream_file") == target.filename:
+                print(f"{image_id}: up to date ({local_version})")
+            else:
+                print(
+                    f"{image_id}: update available "
+                    f"(local {local_version}, upstream {upstream})"
+                )
+                failed = True
+            continue
         if _hash_file(disk, source.checksum_algo) == expected:
             print(f"{image_id}: up to date ({local_version})")
         else:
@@ -228,14 +239,20 @@ def _pull_one(
     expected = _expected_checksum(source, target, client=client, sleep=sleep)
 
     if disk.is_file() and not force:
-        if expected is not None and _hash_file(disk, source.checksum_algo) == expected:
-            print(f"Image {image_id} is up to date ({disk.name}).")
-            return
-        if expected is None:
-            state = imagefetch.load_state(store.image_dir)
-            if _state_value(state, image_id, "upstream_file") == target.filename:
+        state = imagefetch.load_state(store.image_dir)
+        same_upstream = _state_value(state, image_id, "upstream_file") == target.filename
+        if _transformed(source, target, state):
+            # 本地是解压/转换产物，哈希与上游发布物不可比，只能比上游文件名
+            if same_upstream:
                 print(f"Image {image_id} is up to date ({disk.name}).")
                 return
+        elif expected is not None:
+            if _hash_file(disk, source.checksum_algo) == expected:
+                print(f"Image {image_id} is up to date ({disk.name}).")
+                return
+        elif same_upstream:
+            print(f"Image {image_id} is up to date ({disk.name}).")
+            return
 
     _download(store, source, target, expected, progress=progress, client=client)
 
@@ -359,7 +376,7 @@ def _download(
         client=client,
         progress=progress,
     )
-    os.replace(part, disk)
+    fmt, source_fmt = _materialize(part, disk, source, target)
 
     state = imagefetch.load_state(disk.parent)
     state[source.id] = {
@@ -370,11 +387,48 @@ def _download(
         "checksum_algo": source.checksum_algo,
         "checksum": result.checksum,
         "size": result.size,
+        "format": fmt,
+        "source_format": source_fmt,
+        "transformed": "true" if fmt != source_fmt else "false",
         "fetched_at": _timestamp(),
     }
     imagefetch.save_state(disk.parent, state)
     print(f"Image {source.id} saved to {disk}.")
     return disk
+
+
+def _materialize(
+    part: Path,
+    disk: Path,
+    source: ImageSource,
+    target: imagefetch.RemoteTarget,
+) -> tuple[str, str]:
+    """解压压缩包并转换成声明的格式，最后原子替换为正式镜像。
+
+    返回 ``(最终格式, 源格式)``。临时文件在成功与否都会清理；失败时正式镜像
+    保持原样。
+    """
+    extracted = disk.with_name(f".{disk.name}.raw")
+    converted = disk.with_name(f".{disk.name}.conv")
+    try:
+        current = part
+        if imagefetch.is_archive(target.filename):
+            print(f"Extracting {target.filename} ...")
+            imagefetch.extract_archive(part, extracted, filename=target.filename)
+            current = extracted
+        actual = imagefmt.detect(current)
+        wanted = source.format or actual
+        if wanted == actual:
+            os.replace(current, disk)
+        else:
+            print(f"Converting {actual} image to {wanted} ...")
+            imagefmt.convert(current, converted, wanted)
+            os.replace(converted, disk)
+        return wanted, actual
+    finally:
+        for leftover in (part, extracted, converted):
+            if leftover.exists():
+                leftover.unlink()
 
 
 def _hash_file(path: Path, algo: str) -> str:
@@ -383,6 +437,17 @@ def _hash_file(path: Path, algo: str) -> str:
         for chunk in iter(lambda: handle.read(imagefetch.CHUNK_SIZE), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _transformed(
+    source: ImageSource,
+    target: imagefetch.RemoteTarget,
+    state: dict[str, dict[str, object]],
+) -> bool:
+    """本地文件是否经过解压/格式转换（此时哈希与上游发布物不可直接比对）。"""
+    if imagefetch.is_archive(target.filename):
+        return True
+    return _state_value(state, source.id, "transformed") == "true"
 
 
 def _state_value(

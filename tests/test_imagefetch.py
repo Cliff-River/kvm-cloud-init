@@ -40,6 +40,68 @@ def _no_sleep(_seconds: float) -> None:
     return None
 
 
+# ---- 压缩包解压 ----
+
+
+def _make_tar(path: Path, member: str, payload: bytes) -> Path:
+    import io
+    import tarfile
+
+    with tarfile.open(path, "w:xz") as tf:
+        info = tarfile.TarInfo(member)
+        info.size = len(payload)
+        tf.addfile(info, io.BytesIO(payload))
+    return path
+
+
+def test_is_archive_recognises_supported_suffixes() -> None:
+    assert imagefetch.is_archive("kali-linux-2026.3-cloud-genericcloud-amd64.tar.xz")
+    assert imagefetch.is_archive("image.tar.gz")
+    assert imagefetch.is_archive("image.zip")
+    assert not imagefetch.is_archive("image.qcow2")
+    assert not imagefetch.is_archive("image.raw")
+
+
+def test_extract_archive_unpacks_single_member(tmp_path: Path) -> None:
+    payload = b"HEAD" + b"\x00" * (2 << 20) + b"TAIL"
+    archive = _make_tar(tmp_path / "disk.tar.xz", "disk.raw", payload)
+    dest = tmp_path / "disk.raw"
+    assert imagefetch.extract_archive(archive, dest) == "disk.raw"
+    assert dest.read_bytes() == payload
+
+
+def test_extract_archive_uses_logical_filename(tmp_path: Path) -> None:
+    # 下载中的临时文件以 .part 结尾，压缩格式须由上游文件名判定
+    payload = b"DATA" + b"\x00" * 4096
+    archive = _make_tar(tmp_path / ".disk.qcow2.part", "disk.raw", payload)
+    dest = tmp_path / "disk.raw"
+    assert imagefetch.extract_archive(
+        archive, dest, filename="disk-1.0.tar.xz"
+    ) == "disk.raw"
+    assert dest.read_bytes() == payload
+
+
+def test_extract_archive_rejects_multiple_members(tmp_path: Path) -> None:
+    import io
+    import tarfile
+
+    archive = tmp_path / "two.tar"
+    with tarfile.open(archive, "w") as tf:
+        for name in ("a.raw", "b.raw"):
+            info = tarfile.TarInfo(name)
+            info.size = 1
+            tf.addfile(info, io.BytesIO(b"x"))
+    with pytest.raises(ImageFetchError, match="exactly one file, found 2"):
+        imagefetch.extract_archive(archive, tmp_path / "out.raw")
+
+
+def test_extract_archive_rejects_unsupported_container(tmp_path: Path) -> None:
+    weird = tmp_path / "image.7z"
+    weird.write_bytes(b"not really")
+    with pytest.raises(ImageFetchError, match="Unsupported archive format"):
+        imagefetch.extract_archive(weird, tmp_path / "out.raw")
+
+
 # ---- 目录页解析 ----
 
 

@@ -16,7 +16,10 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 - `catalog.py`：内置主流发行版镜像预设（ID 为 `<家族>-<版本>[-变体]`），
   并确定性渲染系统 `images.conf`。
 - `imagefetch.py`：镜像获取纯能力层——目录页解析、校验和解析、`.part`
-  流式下载与原子替换、`images/.state.json`；HTTP 用 `httpx`，HTML 用 `parsel`。
+  流式下载与原子替换、压缩包解压（tarfile/zipfile）、`images/.state.json`；
+  HTTP 用 `httpx`，HTML 用 `parsel`。
+- `imagefmt.py`：镜像格式纯能力层——按文件头探测 qcow2/raw，
+  raw→qcow2 流式转换（纯标准库，不调用 `qemu-img`）。
 - `cloudinit.py`：cloud-init 三份文档的渲染（实例内联 > 模板内联 > path 目录文件）；
   另含运行时把公钥注入合并后 `user-data`（追加到首个非 root 用户，无则新增 `cliff`）。
 - `seediso.py`：临时目录 + pycdlib 生成卷标 `cidata` 的 ISO。
@@ -45,7 +48,8 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
    禁止用正则抠 XML/JSON。
 4. cloud-init 文档覆盖以整份文件为粒度，不做 YAML 深合并。
 5. 全部代码加类型注解；新增配置字段必须同步更新校验逻辑、配置示例与 README。
-6. 存储资源按实例命名：`<实例名>.qcow2`、`<实例名>-cidata.iso`。
+6. 存储资源按实例命名：`<实例名>.<镜像格式>`（通常 `.qcow2`，源镜像为 raw 时
+   `.raw`）、`<实例名>-cidata.iso`。
 7. 删除保护 `level`（normal/production/protected，缺省 normal）随三级合并；
    production 在 destroy/create 隐式销毁前需交互输入 yes（`--yes` 跳过，
    create 的 `--force` 等价跳过，内部仍优雅关机），非 TTY 必须安全失败；
@@ -70,9 +74,13 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
     系统 `images.conf` 由 `catalog.py` 确定性渲染（缺失自动生成、git-ignored、
     勿手改）；用户条目只写 `images.user.conf`（永不改写，同名键整条覆盖）。
 14. 镜像获取统一走 `imagefetch.py`（HTTP 用 `httpx`、HTML 用 `parsel`；
-    禁止 curl/wget/aria2 子进程）；
-    下载写 `.<文件名>.part`，校验和通过后 `os.replace` 原子替换，失败不得
-    破坏已有完整镜像；缺校验和且未标 `insecure: true` 时拒绝下载。
+    禁止 curl/wget/aria2 子进程）；下载写 `.<文件名>.part`，校验和通过后
+    按需解压单文件压缩包（tarfile/zipfile），再由 `imagefmt.py` 探测实际格式、
+    与条目 `format`（qcow2/raw，缺省按内容识别）不一致时转换（raw→qcow2），
+    最后 `os.replace` 原子替换；失败不得破坏已有完整镜像；
+    缺校验和且未标 `insecure: true` 时拒绝下载。禁止调用 `qemu-img` 子进程。
+    解压/转换产物无法与上游哈希比对，`check` 以其 `.state.json` 的
+    `upstream_file` 为准。
 15. `default.conf` 的 `image_policy`（`auto`/`local`）决定 create 缺失镜像时
     是否联网；`create --local` 单次强制 local。本地镜像已存在时绝不联网、
     绝不替换；更新已有镜像只能显式 `kvmci images pull`。自动下载发生在

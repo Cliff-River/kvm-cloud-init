@@ -250,3 +250,16 @@ def test_domain_ssh_user_reader() -> None:
     )
     assert domain_ssh_user(_FakeDom(with_ssh)) == "cliff"
     assert domain_ssh_user(_FakeDom(_build())) is None
+
+
+def test_disk_driver_follows_image_format() -> None:
+    driver = ET.fromstring(_build()).find("devices/disk/driver")
+    assert driver is not None and driver.get("type") == "qcow2"
+
+    raw = _build_xml(
+        name="vm2", disk_path="/pool/vm2.raw", iso_path="/pool/vm2-cidata.iso",
+        memory_mib=1, vcpus=1, network="default", firmware="bios",
+        os_variant="rocky10", template_name="t", disk_format="raw",
+    )
+    raw_driver = ET.fromstring(raw).find("devices/disk/driver")
+    assert raw_driver is not None and raw_driver.get("type") == "raw"

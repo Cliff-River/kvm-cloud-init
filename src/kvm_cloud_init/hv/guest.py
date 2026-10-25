@@ -39,6 +39,7 @@ def build_domain_xml(
     template_name: str,
     graphics: str = "vnc",
     video: str = "auto",
+    disk_format: str = "qcow2",
     loader: str | None = None,
     nvram_template: str | None = None,
     ssh_user: str | None = None,
@@ -50,7 +51,7 @@ def build_domain_xml(
     为每实例独立的运行时 NVRAM。
 
     ``ssh_user`` 记录本实例的 SSH 登录用户，供 ``kvmci shell`` / ``kvmci exec``
-    在连接时读取。
+    在连接时读取；``disk_format`` 与源镜像格式一致（qcow2 或 raw）。
     """
     ET.register_namespace("kci", METADATA_NS)
     ET.register_namespace("libosinfo", LIBOSINFO_NS)
@@ -98,7 +99,7 @@ def build_domain_xml(
     devices = _sub(domain, "devices")
 
     disk = _sub(devices, "disk", type="file", device="disk")
-    _sub(disk, "driver", name="qemu", type="qcow2")
+    _sub(disk, "driver", name="qemu", type=disk_format)
     _sub(disk, "source", file=disk_path)
     _sub(disk, "target", dev="vda", bus="virtio")
 

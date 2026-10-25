@@ -6,7 +6,7 @@ from pathlib import Path
 
 import libvirt
 
-from .. import cloudinit, qcow2, seediso, ssh
+from .. import cloudinit, imagefmt, qcow2, seediso, ssh
 from ..config import ConfigStore
 from ..hv import client, domains, firmware, guest
 from ..hv import storage as hv_storage
@@ -16,12 +16,11 @@ from .guard import ensure_destroy_allowed
 from .images import ensure_image
 from .progress import progress_printer
 
-DISK_SUFFIX = ".qcow2"
 SEED_SUFFIX = "-cidata.iso"
 
 
-def _disk_name(instance_name: str) -> str:
-    return f"{instance_name}{DISK_SUFFIX}"
+def _disk_name(instance_name: str, fmt: str = "qcow2") -> str:
+    return f"{instance_name}.{fmt}"
 
 
 def _seed_name(instance_name: str) -> str:
@@ -81,14 +80,22 @@ def create_instance(
         docs["user-data"], public_key
     )
 
+    # 源镜像可为 qcow2 或 raw：raw 的虚拟大小就是文件长度
+    image_format = imagefmt.detect(resolved.image_path)
+    virtual_size = (
+        qcow2.read_info(str(resolved.image_path)).virtual_size
+        if image_format == "qcow2"
+        else resolved.image_path.stat().st_size
+    )
+
     pool = client.get_pool(conn, resolved.storage_pool, refresh=True)
     pool_dir = pool_target_path(pool)
 
     # 销毁后仍可能残留同名卷或未注册文件（例如上次创建中途失败），先清掉
-    hv_storage.delete_path(conn, pool, str(Path(pool_dir) / _disk_name(name)))
+    for fmt in {image_format, "qcow2"}:
+        stale = Path(pool_dir) / _disk_name(name, fmt)
+        hv_storage.delete_path(conn, pool, str(stale))
     hv_storage.delete_path(conn, pool, str(Path(pool_dir) / _seed_name(name)))
-
-    image_info = qcow2.read_info(str(resolved.image_path))
 
     with seediso.temporary_seed(docs) as seed_path:
         print(
@@ -97,14 +104,14 @@ def create_instance(
         )
         disk_vol = hv_storage.upload_file(
             pool,
-            _disk_name(name),
+            _disk_name(name, image_format),
             str(resolved.image_path),
-            "qcow2",
-            image_info.virtual_size,
+            image_format,
+            virtual_size,
         )
         if resolved.capacity:
             target = qcow2.parse_size(resolved.capacity)
-            if target > image_info.virtual_size:
+            if target > virtual_size:
                 print(f"Resizing disk to {resolved.capacity} ...")
                 hv_storage.resize_volume(disk_vol, target)
 
@@ -136,8 +143,9 @@ def create_instance(
 
     xml_desc = guest.build_domain_xml(
         name=name,
-        disk_path=str(Path(pool_dir) / _disk_name(name)),
+        disk_path=str(Path(pool_dir) / _disk_name(name, image_format)),
         iso_path=str(Path(pool_dir) / _seed_name(name)),
+        disk_format=image_format,
         memory_mib=resolved.memory,
         vcpus=resolved.vcpus,
         network=resolved.network,

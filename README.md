@@ -146,9 +146,9 @@ There are three layers, merged into one registry:
 `images.conf` is rendered deterministically from the bundled preset on first
 load (or by `kvmci images init`) and lists mainstream distributions:
 AlmaLinux 8/9/10, Rocky 8/9/10 (GenericCloud and LVM), CentOS Stream 9/10,
-Debian 11/12/13, Ubuntu 20.04/22.04/24.04/26.04 and Fedora 43/44. EOL releases
-are marked `archived` and skipped by `check`/`refresh` unless
-`--include-archived` is used.
+Debian 11/12/13, Ubuntu 20.04/22.04/24.04/26.04, Fedora 43/44 and Kali Linux
+(rolling `current` only). EOL releases are marked `archived` and skipped by
+`check`/`refresh` unless `--include-archived` is used.
 
 Add or override entries in `images.user.conf` (same schema; a same-named key
 replaces the system definition wholesale):
@@ -160,6 +160,7 @@ my-internal:
   urls:
     - http://mirror.example.internal/images/my-internal-1.0.qcow2
   checksum_url: http://mirror.example.internal/images/my-internal-1.0.qcow2.sha256
+  format: qcow2          # optional: qcow2/raw, detected from content when omitted
 ```
 
 Two source kinds are supported:
@@ -168,6 +169,17 @@ Two source kinds are supported:
 - `index`: crawl an HTTP directory listing, pick the newest file matching
   `match` (by `name` or `mtime`), and locate the checksum with
   `checksum_file` or `checksum_match` (`pages`, `checksum_algo`).
+
+`format` declares the local on-disk format (`qcow2` or `raw`). When it is
+omitted the format is detected from the file's magic bytes; when the detected
+format differs from the declaration, the image is converted (raw → qcow2)
+before it is saved. Published files may also be compressed archives
+(`.tar.xz`, `.tar.gz`, `.tar.bz2`, `.tgz`, `.tar`, `.zip`); an archive must
+contain exactly one file and is extracted during `pull`, skipping zero blocks
+so a sparse raw disk does not occupy its full virtual size. Kali Linux ships
+its cloud image as a `.tar.xz` containing a 25 GiB `disk.raw`; the
+`kali-linux` entry declares `format: qcow2`, so the extracted raw disk is
+converted to qcow2 automatically.
 
 Downloads are streamed with `httpx` to `.<file>.part`, hashed on the
 fly, verified against the upstream checksum, and atomically renamed. Failures
@@ -185,7 +197,10 @@ version display only.
 a newer upstream exists). If it is missing, `image_policy: auto` (default)
 resolves and downloads it first; `image_policy: local` or `create --local`
 fails with `ImageNotFound` instead. Updating an existing image is always an
-explicit `kvmci images pull`.
+explicit `kvmci images pull`. Because a transformed image (extracted or
+converted) cannot be hash-compared with the upstream release, `images check`
+compares the upstream file name recorded in `.state.json` instead; `pull`
+replaces it when that name changes.
 
 ## Deletion Protection
 
@@ -266,9 +281,9 @@ rocky-dev:              # instance name (= libvirt domain name), top-level key
 ```
 
 The instance name is the libvirt domain name. Each instance gets its own
-storage volumes `<name>.qcow2` and `<name>-cidata.iso`, so multiple instances
-can coexist — give them distinct hostnames/IPs in their own `network-config`
-/ `meta-data`.
+storage volumes `<name>.qcow2` (or `<name>.raw` when the source image is raw)
+and `<name>-cidata.iso`, so multiple instances can coexist — give them distinct
+hostnames/IPs in their own `network-config` / `meta-data`.
 
 ## How It Works
 
@@ -451,8 +466,9 @@ cloud-init 日志通常仅 root/组可读，读取失败时会自动回退到 `s
 
 `images.conf` 由内置预设确定性渲染（首次加载或 `kvmci images init`），覆盖主流发行版：
 AlmaLinux 8/9/10、Rocky 8/9/10（GenericCloud 与 LVM）、CentOS Stream 9/10、
-Debian 11/12/13、Ubuntu 20.04/22.04/24.04/26.04、Fedora 43/44。EOL 版本标记为
-`archived`，`check` / `refresh` 默认跳过，`--include-archived` 可纳入。
+Debian 11/12/13、Ubuntu 20.04/22.04/24.04/26.04、Fedora 43/44，以及 Kali Linux
+（仅滚动 `current` 版本）。EOL 版本标记为 `archived`，`check` / `refresh` 默认跳过，
+`--include-archived` 可纳入。
 
 在 `images.user.conf` 中新增或覆盖条目（同名键会整条替换系统定义）：
 
@@ -463,6 +479,7 @@ my-internal:
   urls:
     - http://mirror.example.internal/images/my-internal-1.0.qcow2
   checksum_url: http://mirror.example.internal/images/my-internal-1.0.qcow2.sha256
+  format: qcow2          # 可选：qcow2/raw，缺省时按文件内容识别
 ```
 
 支持两种来源：
@@ -470,6 +487,13 @@ my-internal:
 - `url`：固定直链，原位更新（`urls`、`checksum_url`）。
 - `index`：抓取 HTTP 目录页，按 `match` 选最新文件（`name` 或 `mtime` 排序），
   并用 `checksum_file` 或 `checksum_match` 定位校验清单（`pages`、`checksum_algo`）。
+
+`format` 声明本地落盘格式（`qcow2` 或 `raw`）。缺省时按文件头魔数自动识别；
+识别结果与声明不一致时，落盘前会把镜像转换到声明格式（当前支持 raw → qcow2）。
+发布物也可以是压缩包（`.tar.xz`、`.tar.gz`、`.tar.bz2`、`.tgz`、`.tar`、`.zip`）：
+压缩包内必须恰好有一个文件，`pull` 时会自动解压；解压时全零块只移动写入位置，
+稀疏裸盘不会真占满虚拟大小。Kali Linux 的云镜像正是 `.tar.xz` 里包着 25 GiB 的
+`disk.raw`，`kali-linux` 条目声明了 `format: qcow2`，因此解压后会转换成 qcow2。
 
 下载使用 `httpx` 流式写入 `.<文件名>.part`，边下边算哈希，与上游校验和比对后
 原子重命名；失败不会破坏已有完整镜像。交互式终端通过 rich 渲染进度条
@@ -482,6 +506,8 @@ my-internal:
 `create` 优先使用本地已有文件（即使上游有更新也绝不触网）；文件缺失时，
 `image_policy: auto`（默认）会解析并先下载，`image_policy: local` 或 `create --local`
 则以 `ImageNotFound` 失败。更新已有镜像始终需要显式执行 `kvmci images pull`。
+解压或转换后的本地文件无法与上游发布物直接比对哈希，因此 `images check`
+改为比对 `.state.json` 中记录的上游文件名，变化时 `pull` 会重新拉取并转换。
 
 ## 删除保护
 
@@ -558,9 +584,9 @@ rocky-dev:              # 实例名（即 libvirt 域名），顶层键
     ...
 ```
 
-实例名即 libvirt 域名。每个实例使用独立的存储卷 `<名称>.qcow2` 与
-`<名称>-cidata.iso`，因此可同时存在多台实例——请在各自的 `network-config`
-/ `meta-data` 中区分主机名和 IP。
+实例名即 libvirt 域名。每个实例使用独立的存储卷 `<名称>.qcow2`（源镜像是 raw 时
+为 `<名称>.raw`）与 `<名称>-cidata.iso`，因此可同时存在多台实例——请在各自的
+`network-config` / `meta-data` 中区分主机名和 IP。
 
 ## 工作原理
 

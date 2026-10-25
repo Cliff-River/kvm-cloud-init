@@ -29,6 +29,7 @@ REQUIRED_IDS = {
     "ubuntu-26.04",
     "fedora-43",
     "fedora-44",
+    "kali-linux",
 }
 
 

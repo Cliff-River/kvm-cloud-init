@@ -41,12 +41,14 @@ _CHOICE_FIELDS = ("graphics", "video", "level")
 _VALID_IMAGE_KIND = ("url", "index")
 _VALID_ORDER_BY = ("name", "mtime")
 _VALID_CHECKSUM_ALGO = ("sha256", "sha512")
+#: 镜像本地落盘格式；留空时按文件内容自动识别
+_VALID_IMAGE_FORMAT = ("qcow2", "raw")
 #: 镜像缺失时的获取策略
 _VALID_IMAGE_POLICY = ("auto", "local")
 _IMAGE_FIELDS = {
     "file", "kind", "arch", "urls", "pages", "match", "order_by",
     "checksum_url", "checksum_file", "checksum_match", "checksum_algo",
-    "insecure", "archived", "upstream_file", "upstream_version",
+    "format", "insecure", "archived", "upstream_file", "upstream_version",
     "checked_at", "upstream_status",
 }
 
@@ -86,6 +88,7 @@ class ImageSource:
     checksum_file: str | None = None
     checksum_match: str | None = None
     checksum_algo: str = "sha256"
+    format: str | None = None
     insecure: bool = False
     archived: bool = False
     arch: str = "x86_64"
@@ -305,6 +308,11 @@ def _parse_image_source(image_id: str, raw: Any, origin: str) -> ImageSource:
         checksum_file=checksum_file,
         checksum_match=checksum_match,
         checksum_algo=checksum_algo,
+        format=(
+            _choice(raw["format"], _VALID_IMAGE_FORMAT, f"image {image_id} field format")
+            if raw.get("format")
+            else None
+        ),
         insecure=_as_bool(raw.get("insecure", False), f"image {image_id} field insecure"),
         archived=_as_bool(raw.get("archived", False), f"image {image_id} field archived"),
         arch=str(raw.get("arch", "x86_64")),

@@ -5,8 +5,8 @@
 
 ## 项目是什么
 
-`kvm-cloud-init` 把 cloud qcow2 镜像 + cloud-init NoCloud 种子自动化交付为
-KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局。
+`kvm-cloud-init` 把 cloud qcow2/raw 镜像（含压缩包发布物）+ cloud-init NoCloud
+种子自动化交付为 KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局。
 
 ## 目录结构
 
@@ -19,7 +19,7 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 ├── instances.conf              # 实例定义（YAML）
 ├── templates/<名称>/            # cloud-init 三件套：
 │                               #   meta-data / network-config / user-data
-├── images/                     # 源 qcow2 镜像 + .state.json 下载状态（git-ignored）
+├── images/                     # 源 qcow2/raw 镜像 + .state.json 下载状态（git-ignored）
 ├── keys/                       # 每实例 SSH 密钥对（git-ignored）：<名称> / <名称>.pub
 ├── src/kvm_cloud_init/
 │   ├── __init__.py             # __version__ + main() 入口
@@ -27,7 +27,8 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 │   │                           #   list/templates/shell/exec/cloud-init/images
 │   ├── config.py               # 配置加载、校验、三级合并、镜像目录合并
 │   ├── catalog.py              # 内置镜像预设 + 确定性渲染 images.conf
-│   ├── imagefetch.py           # 目录页解析、校验和、流式下载、.state.json
+│   ├── imagefetch.py           # 目录页解析、校验和、流式下载、压缩包解压、.state.json
+│   ├── imagefmt.py             # 镜像格式探测（qcow2/raw）与 raw→qcow2 流式转换
 │   ├── cloudinit.py            # cloud-init 文档渲染 + 运行时公钥/用户注入
 │   ├── seediso.py              # pycdlib 生成 cidata.iso（临时目录）
 │   ├── qcow2.py                # qcow2 头 / parse_size / backing chain
@@ -66,7 +67,9 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
 - 镜像获取：`image_policy`（`auto`/`local`）来自 default.conf，`create --local`
   单次强制 local。本地文件已存在时绝不联网、绝不替换；缺失时 auto 先
   `resolve_target`（url 直链 / index 目录页爬虫）→ 校验和比对 → `.part`
-  流式下载 → 原子替换，然后才进入保护级别检查与旧实例销毁。
+  流式下载 → 校验通过后按需解压压缩包（`.tar.xz` 等，tarfile/zipfile 标准库）
+  → `imagefmt.detect` 探测实际格式 → 与条目声明的 `format` 不一致时转换
+  （raw→qcow2）→ 原子替换，然后才进入保护级别检查与旧实例销毁。
   更新已有镜像只能显式 `kvmci images pull`。
 - `images check` 默认只查模板引用镜像，`--all` 查整个目录；`images pull --all`
   恰为模板引用镜像的去重集合；`pull` 无 ID 且无 `--all` 退出 2。
@@ -76,7 +79,8 @@ KVM 虚拟机，支持多 OS 模板与多实例。Python 3.13 + uv + src 布局�
   安全失败；protected 对任何标志都拒绝，只能改配置解除。未登记实例按 normal。
 - 创建：生成/复用 `keys/<名称>` 密钥对 → 渲染文档并把公钥运行时注入合并后
   `user-data`（追加到首个非 root 用户，无则新增 `cliff`）→ 临时目录生成
-  cidata.iso（pycdlib）→ stream 上传镜像与 ISO 到存储池（按实例命名卷）→
+  cidata.iso（pycdlib）→ stream 上传镜像与 ISO 到存储池（按实例命名卷，
+  卷名后缀与 disk driver 跟随源镜像探测格式 qcow2/raw）→
   可选卷扩容 → 构建 domain XML（含 `ssh-user` 元数据）→ define + start →
   默认等待 cloud-init（`--no-wait` 跳过，`--verbose` 7 行滚动）。
 - 生命周期：`start` 用 `dom.create()`（本绑定不接受 flags），`stop` 与 `destroy` 共用
@@ -126,7 +130,8 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 - 不要重新引入 Bash 脚本或 subprocess 包装 virsh/virt-install/genisoimage/qemu-img，
   也不要用 subprocess 调用 `ssh`/`ssh-keygen`（统一走 paramiko）。
 - 镜像下载统一走 `imagefetch.py`（HTTP 用 httpx，HTML 用 parsel），
-  不要调用 curl/wget/aria2 子进程。
+  不要调用 curl/wget/aria2 子进程；压缩包解压用标准库 `tarfile`/`zipfile`，
+  格式转换用 `imagefmt.py`，都不要调 `qemu-img` 子进程。
 - 不要手改 `images.conf`（系统生成、git-ignored）；用户条目写入 `images.user.conf`。
 - 不要用正则解析 XML/JSON；用 `xml.etree` 与结构化解析。
 - 不要使用 `qemu:///session`。
@@ -144,6 +149,17 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 - `virDomainInterfaceAddresses` 支持 SRC_LEASE / SRC_AGENT / SRC_ARP 三类来源。
 - `imagefetch.py` 的 HTTP 客户端可注入：测试用
   `httpx.Client(transport=httpx.MockTransport(handler))`，不建立真实连接。
+- `imagefmt.py` 纯标准库实现格式探测与 raw→qcow2 流式转换：qcow2 头 104 字节、
+  64 KiB 簇、refcount order 4；数据簇顺序追加，L1/L2 项都写 `COPIED` 标志，
+  全零簇不分配（`qemu-img check` 0 错误）。虚拟大小按 512 字节扇区向上对齐
+  （qemu 向下取整）；不要对输出 `truncate()` 到当前位置（会截断成 104 字节）。
+- 压缩包解压用标准库 `tarfile`/`zipfile`（`.tar.xz` 走 `r:xz`），要求包内恰好
+  一个普通文件；`extract_archive` 的压缩格式由 `filename` 参数判定——下载中的
+  临时文件名以 `.part` 结尾，无法据此识别。解压时全零块 `seek` 前进保持稀疏。
+- 解压/转换后的镜像哈希与上游发布物不可比：`.state.json` 记录
+  `format`/`source_format`/`transformed`，`check` 对 transformed 条目只比对
+  `upstream_file`。`kali-linux` 预设声明 `format: qcow2`，其 `.tar.xz` 内是
+  25 GiB 的 `disk.raw`。
 - 下载进度由 `provision/progress.DownloadProgress` 提供（表现层，与编排解耦）：
   TTY 用 rich 渲染（彩条、已下载/总量、速度、ETA），并把 `Progress` 内部的
   live 替换为 `_ResizeAwareLive` 子类——终端**缩窄**时按旧帧在新宽度下

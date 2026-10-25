@@ -33,6 +33,7 @@ HEADER = """\
 #   checksum_file   index 模式下目录页内的校验清单文件名
 #   checksum_match  index 模式下校验清单文件名的正则（清单名带版本时使用）
 #   checksum_algo   sha256（默认）| sha512
+#   format          本地落盘格式 qcow2 | raw；留空则按文件内容自动识别
 #   insecure        true 时允许无校验和下载；默认 false
 #   archived        EOL 版本，check 默认跳过
 """
@@ -52,6 +53,7 @@ class PresetEntry:
     checksum_file: str = ""
     checksum_match: str = ""
     checksum_algo: str = "sha256"
+    format: str = ""
     archived: bool = False
     arch: str = "x86_64"
     notes: tuple[str, ...] = field(default=())
@@ -152,6 +154,20 @@ def _fedora(version: str) -> PresetEntry:
     )
 
 
+def _kali() -> PresetEntry:
+    # Kali 只发布滚动 "current" 目录，产物是 .tar.xz 压缩包，内含裸盘 disk.raw；
+    # 声明 format: qcow2 让下载流程解压后转换为 qcow2。
+    return PresetEntry(
+        id="kali-linux",
+        file="kali-linux-cloud-genericcloud-amd64.qcow2",
+        kind="index",
+        pages=("https://kali.download/cloud-images/current/",),
+        match=r"kali-linux-[\d.]+-cloud-genericcloud-amd64\.tar\.xz$",
+        checksum_file="SHA256SUMS",
+        format="qcow2",
+    )
+
+
 #: 内置镜像预设；ID 命名规则为 ``<家族>-<版本>[-变体]``，保持稳定可预测。
 PRESET: tuple[PresetEntry, ...] = (
     _almalinux("8"),
@@ -174,6 +190,7 @@ PRESET: tuple[PresetEntry, ...] = (
     _ubuntu("26.04", archived=False, variant="amd64v3"),
     _fedora("43"),
     _fedora("44"),
+    _kali(),
 )
 
 
@@ -211,6 +228,8 @@ def render_catalog(probes: Mapping[str, Mapping[str, str]] | None = None) -> str
         if entry.checksum_match:
             lines.append(f"  checksum_match: '{entry.checksum_match}'")
         lines.append(f"  checksum_algo: {entry.checksum_algo}")
+        if entry.format:
+            lines.append(f"  format: {entry.format}")
         if entry.archived:
             lines.append("  archived: true")
         probe = (probes or {}).get(entry.id)
