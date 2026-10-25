@@ -214,11 +214,23 @@ def _target(url: str, algo: str = "sha256") -> imagefetch.RemoteTarget:
     )
 
 
+class _Recorder:
+    def __init__(self) -> None:
+        self.events: list[tuple[int, int | None]] = []
+        self.closed = False
+
+    def update(self, done: int, total: int | None) -> None:
+        self.events.append((done, total))
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def test_download_writes_part_and_returns_hash(tmp_path: Path) -> None:
     body = b"cloud image bytes" * 1000
     expected = hashlib.sha256(body).hexdigest()
     part = tmp_path / ".x.qcow2.part"
-    progress: list[tuple[int, int | None]] = []
+    progress = _Recorder()
     result = imagefetch.download(
         _target("https://x/x.qcow2"),
         part,
@@ -227,29 +239,61 @@ def test_download_writes_part_and_returns_hash(tmp_path: Path) -> None:
             {"https://x/x.qcow2": body},
             {"https://x/x.qcow2": {"Content-Length": str(len(body))}},
         ),
-        progress=lambda done, total: progress.append((done, total)),
+        progress=progress,
         sleep=_no_sleep,
     )
     assert result.checksum == expected
     assert result.size == len(body)
     assert part.read_bytes() == body
-    assert progress[-1] == (len(body), len(body))
+    assert (0, len(body)) in progress.events
+    assert progress.events[-1] == (len(body), len(body))
+    assert progress.closed
+
+
+def test_download_uses_head_size_when_get_is_chunked(tmp_path: Path) -> None:
+    body = b"chunked image bytes"
+    expected = hashlib.sha256(body).hexdigest()
+    progress = _Recorder()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            return httpx.Response(
+                200,
+                headers={"Content-Length": str(len(body))},
+                request=request,
+            )
+        # 模拟 chunked：GET 不返回 Content-Length
+        return httpx.Response(200, content=body, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    imagefetch.download(
+        _target("https://x/x.qcow2"),
+        tmp_path / ".x.qcow2.part",
+        expected=expected,
+        client=client,
+        progress=progress,
+        sleep=_no_sleep,
+    )
+    assert (0, len(body)) in progress.events
 
 
 def test_download_mismatch_keeps_existing_and_removes_part(tmp_path: Path) -> None:
     final = tmp_path / "x.qcow2"
     final.write_bytes(b"old complete image")
     part = tmp_path / ".x.qcow2.part"
+    progress = _Recorder()
     with pytest.raises(ImageFetchError, match="checksum mismatch"):
         imagefetch.download(
             _target("https://x/x.qcow2"),
             part,
             expected="0" * 64,
             client=make_client({"https://x/x.qcow2": b"new broken image"}),
+            progress=progress,
             sleep=_no_sleep,
         )
     assert final.read_bytes() == b"old complete image"
     assert not part.exists()
+    assert progress.closed
 
 
 def test_download_falls_back_to_second_url(tmp_path: Path) -> None:

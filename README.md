@@ -171,7 +171,9 @@ Two source kinds are supported:
 
 Downloads are streamed with `httpx` to `.<file>.part`, hashed on the
 fly, verified against the upstream checksum, and atomically renamed. Failures
-never touch an existing complete image. `images/.state.json` records the last
+never touch an existing complete image. Interactive terminals show a `rich`
+progress bar with downloaded/total size, speed, and ETA; non-TTY output logs a
+throttled `current / total` line. `images/.state.json` records the last
 successful download for version display only.
 
 `create` uses the local file if it exists (never touches the network, even when
@@ -465,8 +467,9 @@ my-internal:
   并用 `checksum_file` 或 `checksum_match` 定位校验清单（`pages`、`checksum_algo`）。
 
 下载使用 `httpx` 流式写入 `.<文件名>.part`，边下边算哈希，与上游校验和比对后
-原子重命名；失败不会破坏已有完整镜像。`images/.state.json` 仅用于记录最近一次成功
-下载的版本。
+原子重命名；失败不会破坏已有完整镜像。交互式终端会用 `rich` 显示下载进度条
+（已下载/总量、速度与剩余时间），非 TTY 环境则定期追加 `current / total` 行。
+`images/.state.json` 仅用于记录最近一次成功下载的版本。
 
 `create` 优先使用本地已有文件（即使上游有更新也绝不触网）；文件缺失时，
 `image_policy: auto`（默认）会解析并先下载，`image_policy: local` 或 `create --local`

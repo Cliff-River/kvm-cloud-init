@@ -25,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import httpx
 from parsel import Selector
@@ -49,7 +49,14 @@ _COREUTILS = re.compile(r"^([0-9a-fA-F]+)\s+\*?(.+?)\s*$")
 _BSD = re.compile(r"^[A-Za-z0-9]+ \((.+)\) = ([0-9a-fA-F]+)\s*$")
 
 Client = httpx.Client
-Progress = Callable[[int, int | None], None]
+
+
+class Progress(Protocol):
+    """下载进度接收器；由调用方实现并在下载结束后 ``close``。"""
+
+    def update(self, done: int, total: int | None) -> None: ...
+
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -441,6 +448,9 @@ def download(
     try:
         failures: list[str] = []
         for url in target.urls:
+            # 每次重试从头计数，避免进度条在重置后倒退
+            if progress is not None:
+                progress.update(0, None)
             for attempt in range(RETRIES):
                 try:
                     return _download_once(
@@ -467,6 +477,8 @@ def download(
             f"Failed to download {target.filename}: " + "; ".join(failures)
         )
     finally:
+        if progress is not None:
+            progress.close()
         if owned:
             http.close()
 
@@ -491,11 +503,17 @@ def _download_once(
     with http.stream("GET", url) as response:
         _check_response(response)
         total = _content_length(response)
+        if total is None:
+            # 部分源（如 AlmaLinux）用 chunked 传输，GET 无 Content-Length；
+            # HEAD 通常仍返回准确大小，用于进度与磁盘空间预检。
+            total = _remote_size(http, url)
         if total is not None and total > free_space(part_path.parent):
             raise ImageFetchError(
                 f"Not enough free disk space for {part_path.name}: "
                 f"need {total} bytes"
             )
+        if progress is not None:
+            progress.update(0, total)
         with open(part_path, "wb") as handle:
             for chunk in response.iter_bytes(CHUNK_SIZE):
                 data = bytes(chunk)
@@ -503,7 +521,7 @@ def _download_once(
                 digest.update(data)
                 written += len(data)
                 if progress is not None:
-                    progress(written, total)
+                    progress.update(written, total)
 
     actual = digest.hexdigest()
     if expected is not None and actual != expected.lower():
@@ -519,6 +537,16 @@ def _content_length(response: httpx.Response) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _remote_size(http: Client, url: str) -> int | None:
+    """用 HEAD 获取文件总大小；不支持或失败时返回 None（进度显示当前值）。"""
+    try:
+        response = http.head(url)
+        _check_response(response)
+    except (httpx.HTTPError, _PermanentError):
+        return None
+    return _content_length(response)
 
 
 def _unlink(path: Path) -> None:

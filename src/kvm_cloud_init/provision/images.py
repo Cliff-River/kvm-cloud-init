@@ -9,6 +9,20 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
+
+from rich import filesize
+from rich import progress as rich_progress
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    TaskID,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
+from rich.text import Text
 
 from .. import catalog, imagefetch
 from ..config import ConfigStore, ImageSource
@@ -396,28 +410,101 @@ def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+PROGRESS_INTERVAL = 5.0
+
+
+class _DownloadSizeColumn(DownloadColumn):
+    """总量未知时只显示已下载字节，避免 rich 默认渲染出 ``? MB``。"""
+
+    def render(self, task: rich_progress.Task) -> Text:
+        if task.total is None:
+            return Text(
+                filesize.decimal(int(task.completed)), style="progress.download"
+            )
+        return super().render(task)
+
+
+class DownloadProgress:
+    """下载进度输出。
+
+    交互式终端（TTY）用 rich 渲染进度条、已下载/总量、速度与剩余时间；
+    非 TTY（重定向、CI）降级为每 5 秒追加一行 ``current/total`` 文本。
+    """
+
+    def __init__(self, label: str, *, stream: TextIO | None = None) -> None:
+        self._label = label
+        self._stream = stream if stream is not None else sys.stdout
+        self._interactive = self._stream.isatty()
+        self._done = 0
+        self._total: int | None = None
+        self._reported = False
+        self._last_report = 0.0
+        self._closed = False
+        self._progress: rich_progress.Progress | None = None
+        self._task_id: TaskID | None = None
+
+    def update(self, done: int, total: int | None) -> None:
+        if self._closed:
+            return
+        self._done = done
+        self._total = total
+        if self._interactive:
+            self._render_rich(done, total)
+        else:
+            self._render_plain(done, total)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._progress is not None:
+            if self._total is not None:
+                self._progress.update(self._task_id, completed=self._total)
+            self._progress.stop()
+            self._progress = None
+
+    def _render_rich(self, done: int, total: int | None) -> None:
+        if self._progress is None:
+            self._progress = rich_progress.Progress(
+                TextColumn("[bold]{task.description}"),
+                BarColumn(bar_width=None),
+                _DownloadSizeColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+                console=Console(file=self._stream),
+                transient=False,
+            )
+            self._progress.start()
+            self._task_id = self._progress.add_task(
+                f"Downloading {self._label}", total=total
+            )
+            return
+        self._progress.update(self._task_id, completed=done, total=total)
+
+    def _render_plain(self, done: int, total: int | None) -> None:
+        finished = total is not None and done >= total
+        if not self._reported:
+            if total is None and done == 0:
+                return
+        elif not finished and time.monotonic() - self._last_report < PROGRESS_INTERVAL:
+            return
+        self._reported = True
+        self._last_report = time.monotonic()
+        print(self._text(done, total), file=self._stream, flush=True)
+
+    def _text(self, done: int, total: int | None) -> str:
+        if total is None:
+            return f"Downloading {self._label}: {_fmt_size(done)}"
+        percent = done * 100 // total if total else 100
+        return (
+            f"Downloading {self._label}: "
+            f"{_fmt_size(done)} / {_fmt_size(total)} ({percent}%)"
+        )
+
+
 def progress_printer(label: str) -> Progress:
-    """下载进度输出：TTY 单行原地刷新，非 TTY 每 15 秒追加一行。"""
-    last_report = 0.0
-
-    def report(done: int, total: int | None) -> None:
-        nonlocal last_report
-        now = time.monotonic()
-        if sys.stdout.isatty():
-            text = f"Downloading {label}: {_fmt_size(done)}"
-            if total:
-                text += f" / {_fmt_size(total)} ({done * 100 // total}%)"
-            print("\r" + text + " " * 8, end="", flush=True)
-            if total and done >= total:
-                print()
-            return
-        if now - last_report < 15:
-            return
-        last_report = now
-        suffix = f" / {_fmt_size(total)}" if total else ""
-        print(f"Downloading {label}: {_fmt_size(done)}{suffix}", flush=True)
-
-    return report
+    """为指定镜像创建下载进度接收器。"""
+    return DownloadProgress(label)
 
 
 def _fmt_size(size: int) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from pathlib import Path
 
 import pytest
@@ -289,3 +290,51 @@ def test_ensure_image_requires_checksum_when_secure(
     monkeypatch.setattr(images.imagefetch, "fetch_checksum", lambda *a, **k: None)
     with pytest.raises(ImageFetchError, match="no checksum source"):
         images.ensure_image(store, "base")
+
+
+# ---- 下载进度 ----
+
+
+class _TtyStream(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_download_progress_plain_shows_current_and_total() -> None:
+    stream = io.StringIO()
+    progress = images.DownloadProgress("base", stream=stream)
+    progress.update(0, None)
+    progress.update(0, 4 * 1024 * 1024)
+    progress.update(2 * 1024 * 1024, 4 * 1024 * 1024)
+    progress.update(4 * 1024 * 1024, 4 * 1024 * 1024)
+    progress.close()
+    text = stream.getvalue()
+    assert "0.0 MiB / 4.0 MiB (0%)" in text
+    assert "4.0 MiB / 4.0 MiB (100%)" in text
+
+
+def test_download_progress_rich_renders_bar_on_tty() -> None:
+    stream = _TtyStream()
+    progress = images.DownloadProgress("base", stream=stream)
+    progress.update(0, 4 * 1024 * 1024)
+    progress.update(4 * 1024 * 1024, 4 * 1024 * 1024)
+    progress.close()
+    assert "Downloading base" in stream.getvalue()
+
+
+def test_download_progress_unknown_total_avoids_question_mark() -> None:
+    stream = _TtyStream()
+    progress = images.DownloadProgress("base", stream=stream)
+    progress.update(1024 * 1024, None)
+    progress.close()
+    assert "? MB" not in stream.getvalue()
+
+
+def test_download_progress_close_is_idempotent() -> None:
+    stream = io.StringIO()
+    progress = images.DownloadProgress("base", stream=stream)
+    progress.update(0, 1024)
+    progress.close()
+    progress.close()
+    progress.update(1024, 1024)
+    assert stream.getvalue().count("Downloading base:") == 1
