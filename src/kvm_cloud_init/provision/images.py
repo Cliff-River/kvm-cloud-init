@@ -14,7 +14,7 @@ from .. import catalog, imagefetch
 from ..config import ConfigStore, ImageSource
 from ..errors import ConfigError, ImageFetchError, ImageNotFound
 
-Opener = imagefetch.Opener
+Client = imagefetch.Client
 Progress = imagefetch.Progress
 
 
@@ -42,7 +42,7 @@ def refresh_catalog(
     root: Path,
     *,
     include_archived: bool = False,
-    opener: Opener = imagefetch._default_opener,
+    client: Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """重建 images.conf，并把上游最新文件名/版本写回生成文件的元数据字段。"""
@@ -55,8 +55,8 @@ def refresh_catalog(
         attempted += 1
         source = _preset_source(entry)
         try:
-            target = imagefetch.resolve_target(source, opener=opener, sleep=sleep)
-            checksum = imagefetch.fetch_checksum(target, opener=opener, sleep=sleep)
+            target = imagefetch.resolve_target(source, client=client, sleep=sleep)
+            checksum = imagefetch.fetch_checksum(target, client=client, sleep=sleep)
         except ImageFetchError as exc:
             probes[entry.id] = {
                 "upstream_status": "unreachable",
@@ -134,7 +134,7 @@ def check_images(
     *,
     all_entries: bool = False,
     include_archived: bool = False,
-    opener: Opener = imagefetch._default_opener,
+    client: Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """只探测上游，不下载；存在可更新或失败时返回 1。"""
@@ -152,8 +152,8 @@ def check_images(
         disk = store.image_path(image_id)
         local_version = _state_value(state, image_id, "version") or "-"
         try:
-            target = imagefetch.resolve_target(source, opener=opener, sleep=sleep)
-            expected = _expected_checksum(source, target, opener=opener, sleep=sleep)
+            target = imagefetch.resolve_target(source, client=client, sleep=sleep)
+            expected = _expected_checksum(source, target, client=client, sleep=sleep)
         except ImageFetchError as exc:
             print(f"{image_id}: unreachable ({exc})")
             failed = True
@@ -183,7 +183,7 @@ def pull_images(
     *,
     all_templates: bool = False,
     force: bool = False,
-    opener: Opener = imagefetch._default_opener,
+    client: Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
     progress_factory: Callable[[str], Progress | None] = lambda name: progress_printer(
         name
@@ -198,7 +198,7 @@ def pull_images(
                 store,
                 image_id,
                 force=force,
-                opener=opener,
+                client=client,
                 sleep=sleep,
                 progress=progress_factory(image_id),
             )
@@ -215,14 +215,14 @@ def _pull_one(
     image_id: str,
     *,
     force: bool,
-    opener: Opener,
+    client: Client | None,
     sleep: Callable[[float], None],
     progress: Progress | None,
 ) -> None:
     source = store.images[image_id]
     disk = store.image_path(image_id)
-    target = imagefetch.resolve_target(source, opener=opener, sleep=sleep)
-    expected = _expected_checksum(source, target, opener=opener, sleep=sleep)
+    target = imagefetch.resolve_target(source, client=client, sleep=sleep)
+    expected = _expected_checksum(source, target, client=client, sleep=sleep)
 
     if disk.is_file() and not force:
         if expected is not None and _hash_file(disk, source.checksum_algo) == expected:
@@ -234,7 +234,7 @@ def _pull_one(
                 print(f"Image {image_id} is up to date ({disk.name}).")
                 return
 
-    _download(store, source, target, expected, progress=progress, opener=opener)
+    _download(store, source, target, expected, progress=progress, client=client)
 
 
 def ensure_image(
@@ -242,7 +242,7 @@ def ensure_image(
     image_id: str,
     *,
     policy: str | None = None,
-    opener: Opener = imagefetch._default_opener,
+    client: Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
     progress: Progress | None = None,
 ) -> Path:
@@ -259,10 +259,10 @@ def ensure_image(
         )
 
     source = store.images[image_id]
-    target = imagefetch.resolve_target(source, opener=opener, sleep=sleep)
-    expected = _expected_checksum(source, target, opener=opener, sleep=sleep)
+    target = imagefetch.resolve_target(source, client=client, sleep=sleep)
+    expected = _expected_checksum(source, target, client=client, sleep=sleep)
     print(f"Image {image_id} is missing locally; downloading {target.filename} ...")
-    return _download(store, source, target, expected, progress=progress, opener=opener)
+    return _download(store, source, target, expected, progress=progress, client=client)
 
 
 # --------------------------------------------------------------------------- #
@@ -306,11 +306,11 @@ def _expected_checksum(
     source: ImageSource,
     target: imagefetch.RemoteTarget,
     *,
-    opener: Opener,
+    client: Client | None,
     sleep: Callable[[float], None],
 ) -> str | None:
     try:
-        checksum = imagefetch.fetch_checksum(target, opener=opener, sleep=sleep)
+        checksum = imagefetch.fetch_checksum(target, client=client, sleep=sleep)
     except ImageFetchError:
         if source.insecure:
             print(
@@ -342,7 +342,7 @@ def _download(
     expected: str | None,
     *,
     progress: Progress | None,
-    opener: Opener,
+    client: Client | None,
 ) -> Path:
     disk = store.image_path(source.id)
     disk.parent.mkdir(parents=True, exist_ok=True)
@@ -353,7 +353,7 @@ def _download(
         part,
         algo=source.checksum_algo,
         expected=expected,
-        opener=opener,
+        client=client,
         progress=progress,
     )
     os.replace(part, disk)

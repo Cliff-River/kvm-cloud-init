@@ -1,11 +1,12 @@
 """云镜像下载的纯能力层：目录页解析、校验和、流式下载与本地状态。
 
 本模块不依赖 config / provision / hv，只做 I/O 与解析，便于单元测试时注入
-假的 opener，全程不触网。
+``httpx.Client(transport=...)``，全程不触网。
 
 设计要点：
 
-- 只使用标准库 ``urllib``，不引入第三方 HTTP 依赖，也不调用 curl/wget 子进程；
+- HTTP 统一走 httpx（连接池、重定向、超时集中配置）；HTML 用 parsel 解析；
+- 不调用 curl/wget 子进程；
 - 下载写入 ``.<file>.part`` 临时文件，校验通过后由调用方原子重命名；
 - 校验清单同时支持 coreutils（``<hash>  <file>``）与 BSD
   （``SHA256 (<file>) = <hash>``）两种格式，以及 Fedora 的 PGP 包裹清单。
@@ -19,15 +20,15 @@ import os
 import re
 import sys
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
-from html.parser import HTMLParser
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, Self
+from typing import TYPE_CHECKING
+
+import httpx
+from parsel import Selector
 
 from . import __version__
 from .errors import ImageFetchError
@@ -47,20 +48,7 @@ _EXTENSIONS = (".qcow2", ".img", ".raw")
 _COREUTILS = re.compile(r"^([0-9a-fA-F]+)\s+\*?(.+?)\s*$")
 _BSD = re.compile(r"^[A-Za-z0-9]+ \((.+)\) = ([0-9a-fA-F]+)\s*$")
 
-
-class _Response(Protocol):
-    """urllib 响应的最小接口，便于测试注入假对象。"""
-
-    headers: object
-
-    def read(self, size: int = -1) -> bytes: ...
-
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *exc: object) -> None: ...
-
-
-Opener = Callable[..., Iterator[_Response]]
+Client = httpx.Client
 Progress = Callable[[int, int | None], None]
 
 
@@ -99,20 +87,37 @@ class _PermanentError(Exception):
 # --------------------------------------------------------------------------- #
 
 
-def _request(url: str, *, method: str = "GET") -> urllib.request.Request:
-    return urllib.request.Request(url, method=method, headers={"User-Agent": USER_AGENT})
+def new_client() -> Client:
+    """创建统一配置的 HTTP 客户端；调用方负责 close()。"""
+    return httpx.Client(
+        timeout=TIMEOUT,
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT},
+    )
 
 
-def _default_opener(url: str, *, method: str = "GET", timeout: int = TIMEOUT) -> _Response:
-    return urllib.request.urlopen(_request(url, method=method), timeout=timeout)
+def _use_client(client: Client | None) -> tuple[Client, bool]:
+    """返回 (客户端, 是否由本模块创建)，便于统一关闭临时客户端。"""
+    if client is not None:
+        return client, False
+    return new_client(), True
 
 
 def _describe(exc: BaseException) -> str:
-    if isinstance(exc, urllib.error.HTTPError):
-        return f"HTTP {exc.code} {exc.reason}"
-    if isinstance(exc, urllib.error.URLError):
-        return str(exc.reason)
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
     return str(exc) or exc.__class__.__name__
+
+
+def _check_response(response: httpx.Response) -> None:
+    """4xx（除 408/429）视为不可重试，其余状态错误交由重试逻辑处理。"""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        if 400 <= code < 500 and code not in (408, 429):
+            raise _PermanentError(_describe(exc)) from exc
+        raise
 
 
 def _attempt(
@@ -128,41 +133,47 @@ def _attempt(
             return action()
         except _PermanentError:
             raise
-        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        except (httpx.HTTPError, OSError) as exc:
             last = exc
             if attempt + 1 < RETRIES:
                 sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
+    assert last is not None
     raise _PermanentError(_describe(last)) from last
 
 
 def fetch_text(
     urls: tuple[str, ...],
     *,
-    opener: Opener = _default_opener,
+    client: Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
     """按顺序尝试候选地址，返回第一份可读文本；全部失败抛 ImageFetchError。"""
-    failures: list[str] = []
-    for url in urls:
-        try:
-            return _fetch_text_one(url, opener=opener, sleep=sleep)
-        except _PermanentError as exc:
-            failures.append(f"{url} ({exc})")
-    raise ImageFetchError(
-        "Failed to fetch " + "; ".join(failures) if failures else "Failed to fetch"
-    )
+    http, owned = _use_client(client)
+    try:
+        failures: list[str] = []
+        for url in urls:
+            try:
+                return _fetch_text_one(url, http, sleep=sleep)
+            except _PermanentError as exc:
+                failures.append(f"{url} ({exc})")
+        raise ImageFetchError(
+            "Failed to fetch " + "; ".join(failures) if failures else "Failed to fetch"
+        )
+    finally:
+        if owned:
+            http.close()
 
 
 def _fetch_text_one(
     url: str,
+    http: Client,
     *,
-    opener: Opener,
     sleep: Callable[[float], None],
 ) -> str:
     def read() -> str:
-        with opener(url) as response:
-            raw = response.read()
-        return bytes(raw).decode("utf-8", errors="replace")
+        response = http.get(url)
+        _check_response(response)
+        return response.text
 
     return str(_attempt(url, read, sleep=sleep))
 
@@ -172,24 +183,9 @@ def _fetch_text_one(
 # --------------------------------------------------------------------------- #
 
 
-class _AnchorParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.hrefs: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag != "a":
-            return
-        for key, value in attrs:
-            if key == "href" and value:
-                self.hrefs.append(value)
-
-
 def extract_hrefs(html: str) -> list[str]:
-    """提取全部 <a href>，不做任何正则式 HTML 解析。"""
-    parser = _AnchorParser()
-    parser.feed(html)
-    return parser.hrefs
+    """用 parsel 的 CSS 选择器提取全部 ``<a href>``，不做正则式 HTML 解析。"""
+    return Selector(text=html).css("a::attr(href)").getall()
 
 
 def basename(href: str) -> str:
@@ -226,14 +222,22 @@ def pick_latest(
     candidates: list[RemoteImage],
     order_by: str = "name",
     *,
-    opener: Opener = _default_opener,
+    client: Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> RemoteImage:
     """挑选最新候选；``mtime`` 依赖 HEAD 的 Last-Modified，失败时回退文件名。"""
     if not candidates:
         raise ImageFetchError("Empty image candidate list")
     if order_by == "mtime":
-        stamped = [(mtime_of(item.url, opener=opener), item) for item in candidates]
+        http, owned = _use_client(client)
+        try:
+            stamped = [
+                (mtime_of(item.url, client=http, sleep=sleep), item)
+                for item in candidates
+            ]
+        finally:
+            if owned:
+                http.close()
         if any(stamp is not None for stamp, _ in stamped):
             return max(
                 (pair for pair in stamped if pair[0] is not None),
@@ -249,27 +253,32 @@ def pick_latest(
 def mtime_of(
     url: str,
     *,
-    opener: Opener = _default_opener,
+    client: Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> float | None:
     """HEAD 请求的 Last-Modified 时间戳；不支持或失败时返回 None。"""
-
-    def head() -> float | None:
-        with opener(url, method="HEAD") as response:
-            headers = response.headers
-            value = headers.get("Last-Modified")  # type: ignore[union-attr]
-        if not value:
-            return None
-        try:
-            return parsedate_to_datetime(value).timestamp()
-        except (TypeError, ValueError):
-            return None
-
+    http, owned = _use_client(client)
     try:
-        result = _attempt(url, head, sleep=sleep)
-    except (_PermanentError, AttributeError):
-        return None
-    return result if isinstance(result, float) else None
+
+        def head() -> float | None:
+            response = http.head(url)
+            _check_response(response)
+            value = response.headers.get("Last-Modified")
+            if not value:
+                return None
+            try:
+                return parsedate_to_datetime(value).timestamp()
+            except (TypeError, ValueError):
+                return None
+
+        try:
+            result = _attempt(url, head, sleep=sleep)
+        except _PermanentError:
+            return None
+        return result if isinstance(result, float) else None
+    finally:
+        if owned:
+            http.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -280,7 +289,7 @@ def mtime_of(
 def resolve_target(
     source: ImageSource,
     *,
-    opener: Opener = _default_opener,
+    client: Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> RemoteTarget:
     """把配置中的镜像源解析为可下载目标。
@@ -302,34 +311,41 @@ def resolve_target(
             algo=source.checksum_algo,
         )
 
-    failures: list[str] = []
-    for page in source.pages:
-        try:
-            html = fetch_text((page,), opener=opener, sleep=sleep)
-        except ImageFetchError as exc:
-            failures.append(f"{page} ({exc})")
-            continue
-        candidates = parse_index(html, page, source.match or "")
-        if not candidates:
-            failures.append(f"{page} (no file matched {source.match!r})")
-            continue
-        chosen = pick_latest(candidates, source.order_by, opener=opener, sleep=sleep)
-        checksum_name = source.checksum_file or _match_checksum_name(
-            html, source.checksum_match
+    http, owned = _use_client(client)
+    try:
+        failures: list[str] = []
+        for page in source.pages:
+            try:
+                html = fetch_text((page,), client=http, sleep=sleep)
+            except ImageFetchError as exc:
+                failures.append(f"{page} ({exc})")
+                continue
+            candidates = parse_index(html, page, source.match or "")
+            if not candidates:
+                failures.append(f"{page} (no file matched {source.match!r})")
+                continue
+            chosen = pick_latest(
+                candidates, source.order_by, client=http, sleep=sleep
+            )
+            checksum_name = source.checksum_file or _match_checksum_name(
+                html, source.checksum_match
+            )
+            checksum_url = (
+                urllib.parse.urljoin(page, checksum_name) if checksum_name else None
+            )
+            return RemoteTarget(
+                filename=chosen.filename,
+                urls=(chosen.url,),
+                checksum_url=checksum_url,
+                version=chosen.version,
+                algo=source.checksum_algo,
+            )
+        raise ImageFetchError(
+            f"No usable image found for {source.id}: " + "; ".join(failures)
         )
-        checksum_url = (
-            urllib.parse.urljoin(page, checksum_name) if checksum_name else None
-        )
-        return RemoteTarget(
-            filename=chosen.filename,
-            urls=(chosen.url,),
-            checksum_url=checksum_url,
-            version=chosen.version,
-            algo=source.checksum_algo,
-        )
-    raise ImageFetchError(
-        f"No usable image found for {source.id}: " + "; ".join(failures)
-    )
+    finally:
+        if owned:
+            http.close()
 
 
 def _match_checksum_name(html: str, pattern: str) -> str | None:
@@ -385,13 +401,13 @@ def parse_checksum(text: str, filename: str, algo: str) -> str:
 def fetch_checksum(
     target: RemoteTarget,
     *,
-    opener: Opener = _default_opener,
+    client: Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str | None:
     """拉取并解析目标文件的校验和；没有清单地址时返回 None。"""
     if not target.checksum_url:
         return None
-    text = fetch_text((target.checksum_url,), opener=opener, sleep=sleep)
+    text = fetch_text((target.checksum_url,), client=client, sleep=sleep)
     return parse_checksum(text, target.filename, target.algo)
 
 
@@ -411,7 +427,7 @@ def download(
     *,
     algo: str = "sha256",
     expected: str | None = None,
-    opener: Opener = _default_opener,
+    client: Client | None = None,
     progress: Progress | None = None,
     free_space: Callable[[Path], int] = _free_space,
     sleep: Callable[[float], None] = time.sleep,
@@ -421,33 +437,38 @@ def download(
     校验失败会删除临时文件并重新尝试；全部候选失败时抛 ImageFetchError。
     正式镜像只有在调用方校验通过并原子重命名后才出现。
     """
-    failures: list[str] = []
-    for url in target.urls:
-        for attempt in range(RETRIES):
-            try:
-                return _download_once(
-                    url,
-                    part_path,
-                    algo=algo,
-                    expected=expected,
-                    opener=opener,
-                    progress=progress,
-                    free_space=free_space,
-                )
-            except _ChecksumMismatch as exc:
-                failures.append(str(exc))
-                _unlink(part_path)
-            except _PermanentError as exc:
-                failures.append(f"{url} ({exc})")
-                break
-            except (urllib.error.URLError, OSError, TimeoutError) as exc:
-                failures.append(f"{url} ({_describe(exc)})")
-                _unlink(part_path)
-            if attempt + 1 < RETRIES:
-                sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
-    raise ImageFetchError(
-        f"Failed to download {target.filename}: " + "; ".join(failures)
-    )
+    http, owned = _use_client(client)
+    try:
+        failures: list[str] = []
+        for url in target.urls:
+            for attempt in range(RETRIES):
+                try:
+                    return _download_once(
+                        http,
+                        url,
+                        part_path,
+                        algo=algo,
+                        expected=expected,
+                        progress=progress,
+                        free_space=free_space,
+                    )
+                except _ChecksumMismatch as exc:
+                    failures.append(str(exc))
+                    _unlink(part_path)
+                except _PermanentError as exc:
+                    failures.append(f"{url} ({exc})")
+                    break
+                except (httpx.HTTPError, OSError) as exc:
+                    failures.append(f"{url} ({_describe(exc)})")
+                    _unlink(part_path)
+                if attempt + 1 < RETRIES:
+                    sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
+        raise ImageFetchError(
+            f"Failed to download {target.filename}: " + "; ".join(failures)
+        )
+    finally:
+        if owned:
+            http.close()
 
 
 class _ChecksumMismatch(Exception):
@@ -455,43 +476,34 @@ class _ChecksumMismatch(Exception):
 
 
 def _download_once(
+    http: Client,
     url: str,
     part_path: Path,
     *,
     algo: str,
     expected: str | None,
-    opener: Opener,
     progress: Progress | None,
     free_space: Callable[[Path], int],
 ) -> DownloadResult:
     _unlink(part_path)
     digest = hashlib.new(algo)
     written = 0
-    try:
-        with opener(url) as response:
-            total = _content_length(response)
-            if total is not None and total > free_space(part_path.parent):
-                raise ImageFetchError(
-                    f"Not enough free disk space for {part_path.name}: "
-                    f"need {total} bytes"
-                )
-            with open(part_path, "wb") as handle:
-                while True:
-                    chunk = response.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    data = bytes(chunk)
-                    handle.write(data)
-                    digest.update(data)
-                    written += len(data)
-                    if progress is not None:
-                        progress(written, total)
-    except urllib.error.HTTPError as exc:
-        if 400 <= exc.code < 500 and exc.code not in (408, 429):
-            raise _PermanentError(_describe(exc)) from exc
-        raise
-    except urllib.error.URLError:
-        raise
+    with http.stream("GET", url) as response:
+        _check_response(response)
+        total = _content_length(response)
+        if total is not None and total > free_space(part_path.parent):
+            raise ImageFetchError(
+                f"Not enough free disk space for {part_path.name}: "
+                f"need {total} bytes"
+            )
+        with open(part_path, "wb") as handle:
+            for chunk in response.iter_bytes(CHUNK_SIZE):
+                data = bytes(chunk)
+                handle.write(data)
+                digest.update(data)
+                written += len(data)
+                if progress is not None:
+                    progress(written, total)
 
     actual = digest.hexdigest()
     if expected is not None and actual != expected.lower():
@@ -501,12 +513,8 @@ def _download_once(
     return DownloadResult(checksum=actual, size=written)
 
 
-def _content_length(response: _Response) -> int | None:
-    headers = response.headers
-    getter = getattr(headers, "get", None)
-    if getter is None:
-        return None
-    value = getter("Content-Length")
+def _content_length(response: httpx.Response) -> int | None:
+    value = response.headers.get("Content-Length")
     try:
         return int(value) if value is not None else None
     except (TypeError, ValueError):

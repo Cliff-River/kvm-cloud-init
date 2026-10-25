@@ -1,13 +1,15 @@
-"""imagefetch 纯能力层测试：目录页解析、校验和、下载与状态（全部注入假 opener）。"""
+"""imagefetch 纯能力层测试：目录页解析、校验和、下载与状态。
+
+HTTP 全部通过 ``httpx.MockTransport`` 注入，不建立真实连接。
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import urllib.error
 from pathlib import Path
-from typing import Self
 
+import httpx
 import pytest
 
 from kvm_cloud_init import imagefetch
@@ -17,42 +19,21 @@ from kvm_cloud_init.errors import ImageFetchError
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-class _Response:
-    """最小 urllib 响应替身：支持分块 read 与 headers.get。"""
-
-    def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
-        self._body = body
-        self._pos = 0
-        self.headers = dict(headers or {})
-
-    def read(self, size: int = -1) -> bytes:
-        if size < 0:
-            data = self._body[self._pos :]
-            self._pos = len(self._body)
-            return data
-        data = self._body[self._pos : self._pos + size]
-        self._pos += len(data)
-        return data
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        return None
-
-
-def make_opener(
+def make_client(
     routes: dict[str, bytes],
     headers: dict[str, dict[str, str]] | None = None,
-):
-    """按 URL 返回固定内容的假 opener；未登记 URL 返回 404。"""
+) -> httpx.Client:
+    """按 URL 返回固定内容的假客户端；未登记 URL 返回 404。"""
 
-    def opener(url: str, *, method: str = "GET", timeout: int = 30):
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
         if url not in routes:
-            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
-        return _Response(routes[url], (headers or {}).get(url))
+            return httpx.Response(404, request=request)
+        extra = (headers or {}).get(url, {})
+        body = b"" if request.method == "HEAD" else routes[url]
+        return httpx.Response(200, content=body, headers=extra, request=request)
 
-    return opener
+    return httpx.Client(transport=httpx.MockTransport(handler))
 
 
 def _no_sleep(_seconds: float) -> None:
@@ -101,22 +82,21 @@ def test_pick_latest_by_mtime_with_fake_head() -> None:
         imagefetch.RemoteImage("a-2.qcow2", "https://x/a-2.qcow2", "2"),
     ]
     headers = {
-        "https://x/a-1.qcow2": {"Last-Modified": "Mon, 01 Jan 2024 00:00:00 GMT"},
+        "https://x/a-1.qcow2": {"Last-Modified": "Wed, 01 Jan 2025 00:00:00 GMT"},
         "https://x/a-2.qcow2": {"Last-Modified": "Mon, 01 Jan 2024 00:00:00 GMT"},
     }
-    headers["https://x/a-1.qcow2"] = {"Last-Modified": "Wed, 01 Jan 2025 00:00:00 GMT"}
-    opener = make_opener({url: b"" for url in headers}, headers)
+    client = make_client({url: b"" for url in headers}, headers)
     chosen = imagefetch.pick_latest(
-        candidates, "mtime", opener=opener, sleep=_no_sleep
+        candidates, "mtime", client=client, sleep=_no_sleep
     )
     assert chosen.filename == "a-1.qcow2"
 
 
 def test_pick_latest_mtime_fallback_warns(capsys) -> None:
     candidates = [imagefetch.RemoteImage("a.qcow2", "https://x/a.qcow2", "a")]
-    opener = make_opener({"https://x/a.qcow2": b""})
+    client = make_client({"https://x/a.qcow2": b""})
     chosen = imagefetch.pick_latest(
-        candidates, "mtime", opener=opener, sleep=_no_sleep
+        candidates, "mtime", client=client, sleep=_no_sleep
     )
     assert chosen.filename == "a.qcow2"
     assert "falling back" in capsys.readouterr().err
@@ -151,7 +131,7 @@ def test_resolve_target_index_finds_checksum_file() -> None:
         checksum_file="CHECKSUM",
     )
     target = imagefetch.resolve_target(
-        source, opener=make_opener({page: html.encode()}), sleep=_no_sleep
+        source, client=make_client({page: html.encode()}), sleep=_no_sleep
     )
     assert target.filename.endswith("10.2-20260525.0.x86_64.qcow2")
     assert target.checksum_url == page + "CHECKSUM"
@@ -169,7 +149,7 @@ def test_resolve_target_index_uses_checksum_match() -> None:
         checksum_match=r"CHECKSUM$",
     )
     target = imagefetch.resolve_target(
-        source, opener=make_opener({page: html.encode()}), sleep=_no_sleep
+        source, client=make_client({page: html.encode()}), sleep=_no_sleep
     )
     assert target.checksum_url == page + "CHECKSUM"
 
@@ -186,7 +166,7 @@ def test_resolve_target_index_errors_when_nothing_matches() -> None:
     )
     with pytest.raises(ImageFetchError, match="No usable image"):
         imagefetch.resolve_target(
-            source, opener=make_opener({page: b"<html></html>"}), sleep=_no_sleep
+            source, client=make_client({page: b"<html></html>"}), sleep=_no_sleep
         )
 
 
@@ -243,8 +223,9 @@ def test_download_writes_part_and_returns_hash(tmp_path: Path) -> None:
         _target("https://x/x.qcow2"),
         part,
         expected=expected,
-        opener=make_opener(
-            {"https://x/x.qcow2": body}, {"https://x/x.qcow2": {"Content-Length": str(len(body))}}
+        client=make_client(
+            {"https://x/x.qcow2": body},
+            {"https://x/x.qcow2": {"Content-Length": str(len(body))}},
         ),
         progress=lambda done, total: progress.append((done, total)),
         sleep=_no_sleep,
@@ -264,7 +245,7 @@ def test_download_mismatch_keeps_existing_and_removes_part(tmp_path: Path) -> No
             _target("https://x/x.qcow2"),
             part,
             expected="0" * 64,
-            opener=make_opener({"https://x/x.qcow2": b"new broken image"}),
+            client=make_client({"https://x/x.qcow2": b"new broken image"}),
             sleep=_no_sleep,
         )
     assert final.read_bytes() == b"old complete image"
@@ -284,7 +265,7 @@ def test_download_falls_back_to_second_url(tmp_path: Path) -> None:
         target,
         tmp_path / ".x.qcow2.part",
         expected=expected,
-        opener=make_opener({"https://x/x.qcow2": body}),
+        client=make_client({"https://x/x.qcow2": body}),
         sleep=_no_sleep,
     )
     assert result.checksum == expected
@@ -296,7 +277,7 @@ def test_download_fails_without_free_space(tmp_path: Path) -> None:
         imagefetch.download(
             _target("https://x/x.qcow2"),
             tmp_path / ".x.qcow2.part",
-            opener=make_opener(
+            client=make_client(
                 {"https://x/x.qcow2": body},
                 {"https://x/x.qcow2": {"Content-Length": str(len(body))}},
             ),

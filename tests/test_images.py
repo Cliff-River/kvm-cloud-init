@@ -31,11 +31,11 @@ def _patch_remote(
     """替换网络解析与校验和获取，返回调用计数。"""
     calls = {"resolve": 0, "checksum": 0}
 
-    def fake_resolve(source, *, opener=None, sleep=None):
+    def fake_resolve(source, *, client=None, sleep=None):
         calls["resolve"] += 1
         return target or _target(source.file)
 
-    def fake_checksum(remote, *, opener=None, sleep=None):
+    def fake_checksum(remote, *, client=None, sleep=None):
         calls["checksum"] += 1
         return checksum
 
@@ -99,7 +99,7 @@ def test_refresh_writes_upstream_metadata_and_skips_archived(
 
 
 def test_refresh_records_unreachable_and_continues(tmp_path: Path, monkeypatch) -> None:
-    def raise_unreachable(source, *, opener=None, sleep=None):
+    def raise_unreachable(source, *, client=None, sleep=None):
         raise ImageFetchError("down")
 
     monkeypatch.setattr(images.imagefetch, "resolve_target", raise_unreachable)

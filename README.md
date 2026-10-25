@@ -169,7 +169,7 @@ Two source kinds are supported:
   `match` (by `name` or `mtime`), and locate the checksum with
   `checksum_file` or `checksum_match` (`pages`, `checksum_algo`).
 
-Downloads are streamed with stdlib `urllib` to `.<file>.part`, hashed on the
+Downloads are streamed with `httpx` to `.<file>.part`, hashed on the
 fly, verified against the upstream checksum, and atomically renamed. Failures
 never touch an existing complete image. `images/.state.json` records the last
 successful download for version display only.
@@ -464,7 +464,7 @@ my-internal:
 - `index`：抓取 HTTP 目录页，按 `match` 选最新文件（`name` 或 `mtime` 排序），
   并用 `checksum_file` 或 `checksum_match` 定位校验清单（`pages`、`checksum_algo`）。
 
-下载使用标准库 `urllib` 流式写入 `.<文件名>.part`，边下边算哈希，与上游校验和比对后
+下载使用 `httpx` 流式写入 `.<文件名>.part`，边下边算哈希，与上游校验和比对后
 原子重命名；失败不会破坏已有完整镜像。`images/.state.json` 仅用于记录最近一次成功
 下载的版本。
 

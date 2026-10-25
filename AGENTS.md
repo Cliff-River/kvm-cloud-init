@@ -124,8 +124,8 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 
 - 不要重新引入 Bash 脚本或 subprocess 包装 virsh/virt-install/genisoimage/qemu-img，
   也不要用 subprocess 调用 `ssh`/`ssh-keygen`（统一走 paramiko）。
-- 不要为镜像下载引入第三方 HTTP 库或 curl/wget/aria2 子进程；
-  统一走标准库 `urllib` 与 `imagefetch.py`。
+- 镜像下载统一走 `imagefetch.py`（HTTP 用 httpx，HTML 用 parsel），
+  不要调用 curl/wget/aria2 子进程。
 - 不要手改 `images.conf`（系统生成、git-ignored）；用户条目写入 `images.user.conf`。
 - 不要用正则解析 XML/JSON；用 `xml.etree` 与结构化解析。
 - 不要使用 `qemu:///session`。
@@ -141,6 +141,8 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 - paramiko 5.x 的 `Ed25519Key` 无 `generate()`：`ssh._generate_key` 用
   `getattr(..., "generate", None)` 探测，缺失时回退 `RSAKey.generate(3072)`。
 - `virDomainInterfaceAddresses` 支持 SRC_LEASE / SRC_AGENT / SRC_ARP 三类来源。
+- `imagefetch.py` 的 HTTP 客户端可注入：测试用
+  `httpx.Client(transport=httpx.MockTransport(handler))`，不建立真实连接。
 - `ssh.run_command` 的 TTY 分支必须保留 `exec_command()` 返回的 stdin/stderr
   文件对象：只取 stdout 会让 stdin 文件被 GC 并触发 `shutdown_write()`，
   通道立即 EOF，交互式命令卡死。

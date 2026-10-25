@@ -39,8 +39,8 @@
 - 不在 `create` 时静默替换**已存在**的本地镜像（缺失才自动下载；
   版本更新只能显式 `kvmci images pull`）。
 - 不做镜像格式转换、压缩解压、去重、P2P/多线程下载加速。
-- 不新增第三方 HTTP 依赖（requests/httpx 等），不引入
-  curl/wget/aria2c 子进程；统一标准库 `urllib`。
+- HTTP 使用 `httpx`，目录页解析使用 `parsel`；不引入
+  curl/wget/aria2c 子进程。
 - 不改 cloud-init 文档渲染、密钥策略、libvirt 上传与 domain XML 逻辑；
   `create` 除“确保镜像存在”这一步外，后续流程与输出语义不变。
 - 不做图形界面。
@@ -238,8 +238,8 @@ image_policy: auto
 
 ### 3.1 网络与重试
 
-- 仅使用标准库：`urllib.request` / `urllib.parse` / `html.parser` /
-  `hashlib` / `json`。不新增依赖，不调子进程。
+- HTTP 使用 `httpx.Client`（统一超时、重定向与连接池），HTML 解析使用
+  `parsel`；`hashlib` / `json` / `urllib.parse` 仍用标准库。不调子进程。
 - 自定义 `User-Agent: kvmci/<version>`；连接与读取超时均 30 秒。
 - 重试：单个 URL 最多 3 次尝试，指数退避（2s、4s）；触发条件为
   网络错误 / 超时 / 5xx；404 立即切换下一个镜像地址。所有候选均失败
@@ -249,8 +249,9 @@ image_policy: auto
 
 ### 3.2 目录页解析（kind: index）
 
-- 用 `html.parser.HTMLParser` 提取全部 `href`，`urllib.parse.urljoin`
-  还原绝对地址后对 basename 应用 `match`；禁止用正则抠 HTML 标签。
+- 用 `parsel.Selector` 的 CSS 选择器 `a::attr(href)` 提取全部链接，
+  `urllib.parse.urljoin` 还原绝对地址后对 basename 应用 `match`；
+  禁止用正则抠 HTML 标签。
 - 目录页按 `pages` 顺序回退；某页可访问但零匹配时，报错信息包含页面
   URL 与正则文本，便于排查上游改版。
 - 解析与挑选做成纯函数，目录页 HTML 以 fixture 形式进测试。

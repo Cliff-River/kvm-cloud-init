@@ -16,7 +16,7 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 - `catalog.py`：内置主流发行版镜像预设（ID 为 `<家族>-<版本>[-变体]`），
   并确定性渲染系统 `images.conf`。
 - `imagefetch.py`：镜像获取纯能力层——目录页解析、校验和解析、`.part`
-  流式下载与原子替换、`images/.state.json`；只用标准库 `urllib`。
+  流式下载与原子替换、`images/.state.json`；HTTP 用 `httpx`，HTML 用 `parsel`。
 - `cloudinit.py`：cloud-init 三份文档的渲染（实例内联 > 模板内联 > path 目录文件）；
   另含运行时把公钥注入合并后 `user-data`（追加到首个非 root 用户，无则新增 `cliff`）。
 - `seediso.py`：临时目录 + pycdlib 生成卷标 `cidata` 的 ISO。
@@ -39,7 +39,7 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 ## 硬性约定
 
 1. 所有实例操作只连接 `qemu:///system`，禁止 `qemu:///session`。
-2. 优先使用 Python 库（libvirt-python、pycdlib、PyYAML、标准库），
+2. 优先使用 Python 库（libvirt-python、pycdlib、PyYAML、httpx、parsel、标准库），
    不新增 subprocess 调用；`hv/storage.py` 的 `sudo -n rm` 是已论证的最后兜底。
 3. 不解析 CLI 输出：libvirt XML 用 `xml.etree`，容量信息用 qcow2 头，
    禁止用正则抠 XML/JSON。
@@ -69,7 +69,8 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
     `image_dir`（本地目录只由 `default.conf` 的 `image_dir` 决定）。
     系统 `images.conf` 由 `catalog.py` 确定性渲染（缺失自动生成、git-ignored、
     勿手改）；用户条目只写 `images.user.conf`（永不改写，同名键整条覆盖）。
-14. 镜像获取只用标准库 `urllib`（禁止第三方 HTTP 库与 curl/wget 子进程）；
+14. 镜像获取统一走 `imagefetch.py`（HTTP 用 `httpx`、HTML 用 `parsel`；
+    禁止 curl/wget/aria2 子进程）；
     下载写 `.<文件名>.part`，校验和通过后 `os.replace` 原子替换，失败不得
     破坏已有完整镜像；缺校验和且未标 `insecure: true` 时拒绝下载。
 15. `default.conf` 的 `image_policy`（`auto`/`local`）决定 create 缺失镜像时
