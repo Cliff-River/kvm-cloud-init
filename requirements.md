@@ -62,7 +62,8 @@ kvmci stop <实例名> [--force]
 
 - 已关机 → 打印 `Instance <name> is already shut off.`，退出码 0。
 - 运行中 → 发送 ACPI 关机（`dom.shutdown()`），按 `shutdown_timeout`
-  轮询至 `shut off`；每 5 秒播报一次等待进度。
+  轮询至 `shut off`；每 5 秒更新一次等待进度：TTY 下同一行原地刷新，
+  非 TTY（重定向/CI）逐行追加。
 - `--force` 语义：**不跳过优雅关机**；仅在超过 `shutdown_timeout`
   仍未关闭时执行强制断电（`dom.destroy()`）。
   这与现有 `destroy --force` 语义保持一致。

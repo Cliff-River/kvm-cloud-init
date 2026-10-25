@@ -194,6 +194,36 @@ def test_shutdown_reports_progress_every_five_seconds(monkeypatch) -> None:
     assert any("forcing power off" in line for line in logs)
 
 
+class _FakeTty:
+    """记录写入内容的假 TTY stdout。"""
+
+    def __init__(self) -> None:
+        self.chunks: list[str] = []
+
+    def isatty(self) -> bool:
+        return True
+
+    def write(self, text: str) -> None:
+        self.chunks.append(text)
+
+    def flush(self) -> None:
+        pass
+
+
+def test_shutdown_progress_inline_on_tty(monkeypatch) -> None:
+    _patch_clock(monkeypatch, [100.0, 105.0, 105.0, 110.0])
+    tty = _FakeTty()
+    monkeypatch.setattr(domains.sys, "stdout", tty)
+    dom = _FakeShutdownDomain([libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_RUNNING])
+
+    domains.shutdown_and_wait(dom, timeout=10, force=True)
+
+    written = "".join(tty.chunks)
+    assert written.count("Waiting for instance vm to shut down") == 1
+    assert "\r\x1b[2K" in written
+    assert dom.destroy_calls == 1
+
+
 def test_shutdown_timeout_without_force_raises(monkeypatch) -> None:
     _patch_clock(monkeypatch, [100.0, 105.0, 105.0, 110.0])
     dom = _FakeShutdownDomain([libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_RUNNING])

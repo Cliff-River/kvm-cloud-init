@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
@@ -110,6 +111,29 @@ def _delete_all_snapshots(dom: libvirt.virDomain) -> None:
             snap.delete(libvirt.VIR_DOMAIN_SNAPSHOT_DELETE_CHILDREN)
 
 
+class _ShutdownProgress:
+    """关机等待进度：TTY 下行内刷新，非 TTY 逐行输出。"""
+
+    def __init__(self, log: Callable[[str], None]) -> None:
+        self._log = log
+        self._inline = sys.stdout.isatty() and log is print
+        self._shown = False
+
+    def report(self, message: str) -> None:
+        if not self._inline:
+            self._log(message)
+            return
+        sys.stdout.write(f"\r\x1b[2K{message}")
+        sys.stdout.flush()
+        self._shown = True
+
+    def clear(self) -> None:
+        if self._inline and self._shown:
+            sys.stdout.write("\r\x1b[2K")
+            sys.stdout.flush()
+            self._shown = False
+
+
 def shutdown_and_wait(
     dom: libvirt.virDomain,
     timeout: int,
@@ -118,6 +142,7 @@ def shutdown_and_wait(
 ) -> None:
     """优雅关机并轮询到 shut off；超时按 force 决定强杀或报错。"""
     name = dom.name()
+    progress = _ShutdownProgress(log)
     state = dom.state(0)[0]
     if state == libvirt.VIR_DOMAIN_SHUTOFF:
         log(f"Instance {name} is already shut off.")
@@ -132,15 +157,19 @@ def shutdown_and_wait(
     while time.monotonic() < deadline:
         state = dom.state(0)[0]
         if state == libvirt.VIR_DOMAIN_SHUTOFF:
+            progress.clear()
             log(f"Instance {name} has shut down.")
             return
         elapsed = int(timeout - (deadline - time.monotonic()))
-        # 每 5 秒播报一次等待进度，避免刷屏
+        # 每 5 秒更新一次等待进度
         if elapsed - last_tick >= 5:
             last_tick = elapsed
-            log(f"Waiting for instance {name} to shut down ... {elapsed}s elapsed")
+            progress.report(
+                f"Waiting for instance {name} to shut down ... {elapsed}s elapsed"
+            )
         time.sleep(1)
 
+    progress.clear()
     if force:
         log(f"Instance {name} did not shut down within {timeout}s; forcing power off.")
         dom.destroy()
