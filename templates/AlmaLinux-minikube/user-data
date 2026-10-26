@@ -59,7 +59,17 @@ runcmd:
       fi
       sleep 5
     done
-  - [ dnf, install, -y, docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin ]
+  # 安装 Docker CE 组件（网络失败自动重试：最多 100 次，间隔 5 秒）
+  - |
+    n=0
+    until dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; do
+      n=$((n+1))
+      if [ "$n" -ge 100 ]; then
+        echo "安装 Docker CE 失败，已重试 $n 次" >&2
+        exit 1
+      fi
+      sleep 5
+    done
   - [ systemctl, enable, --now, docker ]
   - [ /usr/sbin/usermod, -aG, docker, cliff ]
   # 安装 Minikube
