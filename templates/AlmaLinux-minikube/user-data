@@ -59,8 +59,8 @@ runcmd:
       fi
       sleep 5
     done
-  - [ sudo, dnf, install, -y, docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin ]
-  - [ sudo, systemctl, enable, --now, docker ]
+  - [ dnf, install, -y, docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin ]
+  - [ systemctl, enable, --now, docker ]
   - [ /usr/sbin/usermod, -aG, docker, cliff ]
   # 安装 Minikube
   - [
