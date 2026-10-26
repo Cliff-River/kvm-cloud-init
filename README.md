@@ -288,7 +288,7 @@ rocky-dev:              # instance name (= libvirt domain name), top-level key
 The instance name is the libvirt domain name. Each instance gets its own
 storage volumes `<name>.qcow2` (or `<name>.raw` when the source image is raw)
 and `<name>-cidata.iso`, so multiple instances can coexist — give them distinct
-hostnames/IPs in their own `network-config` / `meta-data`.
+hostnames in their own `meta-data`; templates use DHCPv4 by default.
 
 ## How It Works
 
@@ -593,7 +593,7 @@ rocky-dev:              # 实例名（即 libvirt 域名），顶层键
 
 实例名即 libvirt 域名。每个实例使用独立的存储卷 `<名称>.qcow2`（源镜像是 raw 时
 为 `<名称>.raw`）与 `<名称>-cidata.iso`，因此可同时存在多台实例——请在各自的
-`network-config` / `meta-data` 中区分主机名和 IP。
+`meta-data` 中区分主机名；模板默认使用 DHCPv4 获取地址。
 
 ## 工作原理
 
