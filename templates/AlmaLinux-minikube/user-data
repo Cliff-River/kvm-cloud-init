@@ -77,3 +77,6 @@ runcmd:
     curl --retry 100 --retry-all-errors --retry-delay 5 --retry-max-time 600 --connect-timeout 60 -LO "https://dl.k8s.io/release/$(curl --retry 100 --retry-all-errors --retry-delay 5 --retry-max-time 600 --connect-timeout 60 -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
   - [ install, -o, root, -g, root, -m, "0755", kubectl, /usr/local/bin/kubectl ]
   - [ rm, kubectl ]
+  - minikube completion bash > /etc/bash_completion.d/minikube.sh
+  - kubectl completion bash > /etc/bash_completion.d/kubectl.sh
+  - [ systemctl, enable, minikube.service ]
