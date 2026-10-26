@@ -366,17 +366,22 @@ def _download(
 ) -> Path:
     disk = store.image_path(source.id)
     disk.parent.mkdir(parents=True, exist_ok=True)
-    part = disk.with_name(f".{disk.name}.part")
+    removed = imagefetch.sweep_staging(disk.parent)
+    if removed:
+        staging_root = disk.parent / imagefetch.STAGING_DIRNAME
+        print(f"Removed {removed} stale staging directories in {staging_root}.")
     print(f"Downloading image {source.id} ({target.filename}) ...")
-    result = imagefetch.download(
-        target,
-        part,
-        algo=source.checksum_algo,
-        expected=expected,
-        client=client,
-        progress=progress,
-    )
-    fmt, source_fmt = _materialize(part, disk, source, target)
+    with imagefetch.staging_area(disk.parent) as staging:
+        part = staging / "source"
+        result = imagefetch.download(
+            target,
+            part,
+            algo=source.checksum_algo,
+            expected=expected,
+            client=client,
+            progress=progress,
+        )
+        fmt, source_fmt = _materialize(part, staging, disk, source, target)
 
     state = imagefetch.load_state(disk.parent)
     state[source.id] = {
@@ -399,36 +404,32 @@ def _download(
 
 def _materialize(
     part: Path,
+    staging: Path,
     disk: Path,
     source: ImageSource,
     target: imagefetch.RemoteTarget,
 ) -> tuple[str, str]:
     """解压压缩包并转换成声明的格式，最后原子替换为正式镜像。
 
-    返回 ``(最终格式, 源格式)``。临时文件在成功与否都会清理；失败时正式镜像
-    保持原样。
+    返回 ``(最终格式, 源格式)``。``part`` 及其派生产物都位于 ``staging`` 内，
+    由 ``staging_area`` 在退出时整体清理；失败时正式镜像保持原样。
     """
-    extracted = disk.with_name(f".{disk.name}.raw")
-    converted = disk.with_name(f".{disk.name}.conv")
-    try:
-        current = part
-        if imagefetch.is_archive(target.filename):
-            print(f"Extracting {target.filename} ...")
-            imagefetch.extract_archive(part, extracted, filename=target.filename)
-            current = extracted
-        actual = imagefmt.detect(current)
-        wanted = source.format or actual
-        if wanted == actual:
-            os.replace(current, disk)
-        else:
-            print(f"Converting {actual} image to {wanted} ...")
-            imagefmt.convert(current, converted, wanted)
-            os.replace(converted, disk)
-        return wanted, actual
-    finally:
-        for leftover in (part, extracted, converted):
-            if leftover.exists():
-                leftover.unlink()
+    extracted = staging / "extracted"
+    converted = staging / "converted"
+    current = part
+    if imagefetch.is_archive(target.filename):
+        print(f"Extracting {target.filename} ...")
+        imagefetch.extract_archive(part, extracted, filename=target.filename)
+        current = extracted
+    actual = imagefmt.detect(current)
+    wanted = source.format or actual
+    if wanted == actual:
+        os.replace(current, disk)
+    else:
+        print(f"Converting {actual} image to {wanted} ...")
+        imagefmt.convert(current, converted, wanted)
+        os.replace(converted, disk)
+    return wanted, actual
 
 
 def _hash_file(path: Path, algo: str) -> str:

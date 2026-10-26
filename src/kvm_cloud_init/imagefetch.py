@@ -7,7 +7,10 @@
 
 - HTTP 统一走 httpx（连接池、重定向、超时集中配置）；HTML 用 parsel 解析；
 - 不调用 curl/wget 子进程；
-- 下载写入 ``.<file>.part`` 临时文件，校验通过后原子重命名；
+- 下载、解压与转换都在 ``<image_dir>/.staging`` 的临时目录内完成，校验通过
+  后原子重命名；临时目录与最终镜像同文件系统，``os.replace`` 不会跨设备；
+- 暂存目录持有 ``flock`` 排他锁，进程被强杀后的残留由后续运行的
+  :func:`sweep_staging` 回收；
 - 压缩包（``.tar.xz`` 等）由标准库 ``tarfile`` / ``zipfile`` 解出唯一的
   普通文件，全零块按稀疏写入，不产生等量的磁盘占用；
 - 校验清单同时支持 coreutils（``<hash>  <file>``）与 BSD
@@ -17,16 +20,19 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.parse
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -44,6 +50,10 @@ if TYPE_CHECKING:  # pragma: no cover - 仅用于类型提示
     from .config import ImageSource
 
 STATE_FILENAME = ".state.json"
+STAGING_DIRNAME = ".staging"
+STAGING_LOCK = ".lock"
+#: 暂存目录超过该秒数且无人持锁时视为残留（覆盖建目录到加锁的瞬时窗口）
+STAGING_MAX_AGE = 3600.0
 CHUNK_SIZE = 1024 * 1024
 TIMEOUT = 30
 RETRIES = 3
@@ -452,7 +462,7 @@ def extract_archive(archive: Path, dest: Path, *, filename: str | None = None) -
     发布物结构超出预期，直接失败以免解出错误的镜像。解压时全零块改用
     ``seek`` 前进，裸盘的稀疏区域不会真的占用磁盘。
 
-    ``filename`` 是发布物原始文件名：下载中的临时文件以 ``.part`` 结尾，
+    ``filename`` 是发布物原始文件名：暂存文件名为 ``source``（无后缀），
     无法据此判断压缩格式，故由调用方传入上游名字。
     """
     name = filename or archive.name
@@ -508,6 +518,72 @@ def _write_sparse(stream: BinaryIO, dest: Path) -> None:
             else:
                 out.seek(len(chunk), os.SEEK_CUR)
         out.truncate()
+
+
+# --------------------------------------------------------------------------- #
+# 暂存目录（同一文件系统 + flock 探活）
+# --------------------------------------------------------------------------- #
+
+
+@contextlib.contextmanager
+def staging_area(image_dir: Path) -> Iterator[Path]:
+    """在 ``image_dir/.staging`` 下创建临时目录，并持有排他 ``flock``。
+
+    暂存目录与最终镜像位于同一文件系统，``os.replace`` 是一次真正的 rename。
+    退出上下文时（含异常与 Ctrl+C）整目录删除；进程被强杀时由
+    :func:`sweep_staging` 在后续运行中回收。
+    """
+    root = image_dir / STAGING_DIRNAME
+    root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        dir=root, ignore_cleanup_errors=True
+    ) as temporary:
+        path = Path(temporary)
+        lock = (path / STAGING_LOCK).open("wb")
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield path
+        finally:
+            lock.close()
+
+
+def sweep_staging(
+    image_dir: Path,
+    *,
+    max_age: float = STAGING_MAX_AGE,
+    now: float | None = None,
+) -> int:
+    """回收无人使用且超过 ``max_age`` 的暂存目录，返回删除数量。
+
+    活跃下载持有 ``.lock`` 的排他锁：清扫时尝试非阻塞加锁，拿不到锁就跳过。
+    年龄阈值用于覆盖"目录已创建但尚未加锁"的瞬时窗口，也避免刚启动的下载
+    被误删。清理是 best-effort，失败只跳过，不抛出。
+    """
+    root = image_dir / STAGING_DIRNAME
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return 0
+
+    current = time.time() if now is None else now
+    removed = 0
+    for entry in entries:
+        try:
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            if current - entry.stat().st_mtime < max_age:
+                continue
+            with (entry / STAGING_LOCK).open("a+b") as handle:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue
+                shutil.rmtree(entry, ignore_errors=True)
+            if not entry.exists():
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 # --------------------------------------------------------------------------- #

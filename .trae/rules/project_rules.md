@@ -15,9 +15,9 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
   （内置预设 > images.conf > images.user.conf）。
 - `catalog.py`：内置主流发行版镜像预设（ID 为 `<家族>-<版本>[-变体]`），
   并确定性渲染系统 `images.conf`。
-- `imagefetch.py`：镜像获取纯能力层——目录页解析、校验和解析、`.part`
-  流式下载与原子替换、压缩包解压（tarfile/zipfile）、`images/.state.json`；
-  HTTP 用 `httpx`，HTML 用 `parsel`。
+- `imagefetch.py`：镜像获取纯能力层——目录页解析、校验和解析、暂存目录
+  （`tempfile` + `flock`）内的流式下载与原子替换、残留清扫、压缩包解压
+  （tarfile/zipfile）、`images/.state.json`；HTTP 用 `httpx`，HTML 用 `parsel`。
 - `imagefmt.py`：镜像格式纯能力层——按文件头探测 qcow2/raw，
   raw→qcow2 流式转换（纯标准库，不调用 `qemu-img`）。
 - `cloudinit.py`：cloud-init 三份文档的渲染（实例内联 > 模板内联 > path 目录文件）；
@@ -74,13 +74,17 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
     系统 `images.conf` 由 `catalog.py` 确定性渲染（缺失自动生成、git-ignored、
     勿手改）；用户条目只写 `images.user.conf`（永不改写，同名键整条覆盖）。
 14. 镜像获取统一走 `imagefetch.py`（HTTP 用 `httpx`、HTML 用 `parsel`；
-    禁止 curl/wget/aria2 子进程）；下载写 `.<文件名>.part`，校验和通过后
-    按需解压单文件压缩包（tarfile/zipfile），再由 `imagefmt.py` 探测实际格式、
-    与条目 `format`（qcow2/raw，缺省按内容识别）不一致时转换（raw→qcow2），
-    最后 `os.replace` 原子替换；失败不得破坏已有完整镜像；
-    缺校验和且未标 `insecure: true` 时拒绝下载。禁止调用 `qemu-img` 子进程。
-    解压/转换产物无法与上游哈希比对，`check` 以其 `.state.json` 的
-    `upstream_file` 为准。
+    禁止 curl/wget/aria2 子进程）；下载、解压与转换都在
+    `<image_dir>/.staging` 下由 `tempfile.TemporaryDirectory` 创建的临时目录内
+    完成（必须用 `dir=` 固定到同一文件系统，禁止用默认 `/tmp`，否则
+    `os.replace` 会 `EXDEV` 且空间预检失准），校验和通过后按需解压单文件
+    压缩包（tarfile/zipfile），再由 `imagefmt.py` 探测实际格式、与条目
+    `format`（qcow2/raw，缺省按内容识别）不一致时转换（raw→qcow2），
+    最后 `os.replace` 原子替换；失败不得破坏已有完整镜像；暂存目录持有
+    `.lock` 排他 `flock`，下次下载前由 `sweep_staging` 回收超过 1 小时且
+    无人持锁的残留目录；缺校验和且未标 `insecure: true` 时拒绝下载。
+    禁止调用 `qemu-img` 子进程。解压/转换产物无法与上游哈希比对，
+    `check` 以其 `.state.json` 的 `upstream_file` 为准。
 15. `default.conf` 的 `image_policy`（`auto`/`local`）决定 create 缺失镜像时
     是否联网；`create --local` 单次强制 local。本地镜像已存在时绝不联网、
     绝不替换；更新已有镜像只能显式 `kvmci images pull`。自动下载发生在

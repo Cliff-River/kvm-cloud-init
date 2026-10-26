@@ -19,7 +19,8 @@
 ├── instances.conf              # 实例定义（YAML）
 ├── templates/<名称>/            # cloud-init 三件套：
 │                               #   meta-data / network-config / user-data
-├── images/                     # 源 qcow2/raw 镜像 + .state.json 下载状态（git-ignored）
+├── images/                     # 源 qcow2/raw 镜像 + .state.json 下载状态
+│                               #   + .staging/ 下载/解压/转换暂存（git-ignored）
 ├── keys/                       # 每实例 SSH 密钥对（git-ignored）：<名称> / <名称>.pub
 ├── src/kvm_cloud_init/
 │   ├── __init__.py             # __version__ + main() 入口
@@ -66,10 +67,11 @@
   不再有 `image_dir`（本地目录只由 `default.conf` 的 `image_dir` 决定）。
 - 镜像获取：`image_policy`（`auto`/`local`）来自 default.conf，`create --local`
   单次强制 local。本地文件已存在时绝不联网、绝不替换；缺失时 auto 先
-  `resolve_target`（url 直链 / index 目录页爬虫）→ 校验和比对 → `.part`
-  流式下载 → 校验通过后按需解压压缩包（`.tar.xz` 等，tarfile/zipfile 标准库）
-  → `imagefmt.detect` 探测实际格式 → 与条目声明的 `format` 不一致时转换
-  （raw→qcow2）→ 原子替换，然后才进入保护级别检查与旧实例销毁。
+  `resolve_target`（url 直链 / index 目录页爬虫）→ 校验和比对 → 在
+  `images/.staging` 的临时目录内流式下载 → 校验通过后按需解压压缩包
+  （`.tar.xz` 等，tarfile/zipfile 标准库）→ `imagefmt.detect` 探测实际格式
+  → 与条目声明的 `format` 不一致时转换（raw→qcow2）→ 原子替换，
+  然后才进入保护级别检查与旧实例销毁。
   更新已有镜像只能显式 `kvmci images pull`。
 - `images check` 默认只查模板引用镜像，`--all` 查整个目录；`images pull --all`
   恰为模板引用镜像的去重集合；`pull` 无 ID 且无 `--all` 退出 2。
@@ -154,8 +156,8 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
   全零簇不分配（`qemu-img check` 0 错误）。虚拟大小按 512 字节扇区向上对齐
   （qemu 向下取整）；不要对输出 `truncate()` 到当前位置（会截断成 104 字节）。
 - 压缩包解压用标准库 `tarfile`/`zipfile`（`.tar.xz` 走 `r:xz`），要求包内恰好
-  一个普通文件；`extract_archive` 的压缩格式由 `filename` 参数判定——下载中的
-  临时文件名以 `.part` 结尾，无法据此识别。解压时全零块 `seek` 前进保持稀疏。
+  一个普通文件；`extract_archive` 的压缩格式由 `filename` 参数判定——暂存
+  文件名为 `source`（无后缀），无法据此识别。解压时全零块 `seek` 前进保持稀疏。
 - 解压/转换后的镜像哈希与上游发布物不可比：`.state.json` 记录
   `format`/`source_format`/`transformed`，`check` 对 transformed 条目只比对
   `upstream_file`。`kali-linux` 预设声明 `format: qcow2`，其 `.tar.xz` 内是
@@ -172,13 +174,19 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
   传入 `progress_printer`（`provision/__init__.py` 导出）。
   AlmaLinux 等源用 chunked GET（无 Content-Length），`_remote_size` 会用 HEAD
   补总大小；HEAD 不可用时 `_DownloadSizeColumn` 只显示已下载字节，
-  不出现 `? MB`。Ctrl+C 由 `cli.main` 捕获，删除 `.part` 后输出
-  `Operation cancelled.` 并退出 130。
+  不出现 `? MB`。Ctrl+C 由 `cli.main` 捕获，`staging_area` 退出时清理当前
+  暂存目录，随后输出 `Operation cancelled.` 并退出 130。
 - `ssh.run_command` 的 TTY 分支必须保留 `exec_command()` 返回的 stdin/stderr
   文件对象：只取 stdout 会让 stdin 文件被 GC 并触发 `shutdown_write()`，
   通道立即 EOF，交互式命令卡死。
-- 镜像下载写 `.<文件名>.part`，校验通过后 `os.replace` 原子落盘；失败只删
-  `.part`，绝不破坏已有完整镜像。`images/.state.json` 仅记录最近一次成功下载。
+- 镜像下载、解压与转换都在 `<image_dir>/.staging/<临时目录>` 内完成，校验通过后
+  用 `os.replace` 原子落盘。暂存目录必须与最终镜像同一文件系统（同盘保证 rename
+  不跨设备），因此只能用 `tempfile.TemporaryDirectory(dir=...)` 指定到 `.staging`，
+  不能用默认 `/tmp`。下载进程在目录内 `.lock` 上持有排他 `flock`；进程被强杀后
+  的残留目录由 `imagefetch.sweep_staging` 在下次下载前回收——能立刻获得锁且
+  超过 `STAGING_MAX_AGE`（1 小时）才删除，活跃下载不会被误删。
+  失败只清理暂存目录，绝不破坏已有完整镜像。`images/.state.json` 仅记录最近
+  一次成功下载。
 - `catalog.py` 渲染必须确定性（同一预设始终产出同一份 `images.conf`）；
   `images.conf` 的上游探测结果只写入 `upstream_*` / `checked_at` 元数据字段。
 - 校验清单兼容 coreutils（`<hash>  <file>`）与 BSD（`SHA256 (<file>) = <hash>`），

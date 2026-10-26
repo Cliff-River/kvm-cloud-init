@@ -5,8 +5,10 @@ HTTP 全部通过 ``httpx.MockTransport`` 注入，不建立真实连接。
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import httpx
@@ -71,9 +73,9 @@ def test_extract_archive_unpacks_single_member(tmp_path: Path) -> None:
 
 
 def test_extract_archive_uses_logical_filename(tmp_path: Path) -> None:
-    # 下载中的临时文件以 .part 结尾，压缩格式须由上游文件名判定
+    # 暂存文件名无后缀，压缩格式须由上游文件名判定
     payload = b"DATA" + b"\x00" * 4096
-    archive = _make_tar(tmp_path / ".disk.qcow2.part", "disk.raw", payload)
+    archive = _make_tar(tmp_path / "source", "disk.raw", payload)
     dest = tmp_path / "disk.raw"
     assert imagefetch.extract_archive(
         archive, dest, filename="disk-1.0.tar.xz"
@@ -100,6 +102,68 @@ def test_extract_archive_rejects_unsupported_container(tmp_path: Path) -> None:
     weird.write_bytes(b"not really")
     with pytest.raises(ImageFetchError, match="Unsupported archive format"):
         imagefetch.extract_archive(weird, tmp_path / "out.raw")
+
+
+# ---- 暂存目录 ----
+
+
+def _age(path: Path, seconds: float) -> None:
+    stamp = path.stat().st_mtime - seconds
+    os.utime(path, (stamp, stamp))
+
+
+def test_staging_area_creates_under_images_and_cleans_up(tmp_path: Path) -> None:
+    staging: Path | None = None
+    with imagefetch.staging_area(tmp_path) as path:
+        staging = path
+        assert path.is_dir()
+        assert path.parent == tmp_path / imagefetch.STAGING_DIRNAME
+        (path / "source").write_bytes(b"data")
+    assert staging is not None
+    assert not staging.exists()
+
+
+def test_staging_area_holds_exclusive_lock(tmp_path: Path) -> None:
+    with (
+        imagefetch.staging_area(tmp_path) as staging,
+        (staging / imagefetch.STAGING_LOCK).open("rb") as handle,
+        pytest.raises(BlockingIOError),
+    ):
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_sweep_removes_stale_unlocked_only(tmp_path: Path) -> None:
+    root = tmp_path / imagefetch.STAGING_DIRNAME
+    root.mkdir()
+    stale = root / "stale"
+    stale.mkdir()
+    (stale / "source").write_bytes(b"x")
+    _age(stale, imagefetch.STAGING_MAX_AGE + 60)
+    fresh = root / "fresh"
+    fresh.mkdir()
+
+    assert imagefetch.sweep_staging(tmp_path) == 1
+    assert not stale.exists()
+    assert fresh.exists()
+
+
+def test_sweep_skips_active_staging(tmp_path: Path) -> None:
+    root = tmp_path / imagefetch.STAGING_DIRNAME
+    root.mkdir()
+    active = root / "active"
+    active.mkdir()
+    handle = (active / imagefetch.STAGING_LOCK).open("wb")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        _age(active, imagefetch.STAGING_MAX_AGE + 60)
+        assert imagefetch.sweep_staging(tmp_path) == 0
+        assert active.exists()
+    finally:
+        handle.close()
+
+
+def test_sweep_without_staging_dir_returns_zero(tmp_path: Path) -> None:
+    assert imagefetch.sweep_staging(tmp_path) == 0
 
 
 # ---- 目录页解析 ----

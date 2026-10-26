@@ -264,6 +264,8 @@ def test_pull_extracts_archive_and_converts_to_declared_format(
     assert imagefmt.detect(disk) == "qcow2"
     assert qcow2.read_info(str(disk)).virtual_size == len(raw)
     assert not list(store.image_dir.glob(".kali*")), "临时文件必须清理"
+    staging = store.image_dir / imagefetch.STAGING_DIRNAME
+    assert not list(staging.iterdir()), "暂存目录必须清理"
     state = imagefetch.load_state(store.image_dir)
     assert state["kali"]["format"] == "qcow2"
     assert state["kali"]["source_format"] == "raw"
@@ -359,7 +361,8 @@ def test_ensure_image_auto_downloads_and_records_state(
     state = imagefetch.load_state(store.image_dir)
     assert state["base"]["file"] == "base.qcow2"
     assert state["base"]["checksum"] == hashlib.sha256(b"image").hexdigest()
-    assert not (store.image_dir / ".base.qcow2.part").exists()
+    staging = store.image_dir / imagefetch.STAGING_DIRNAME
+    assert not list(staging.iterdir()), "暂存目录必须清理"
 
 
 def test_ensure_image_insecure_without_checksum_warns(

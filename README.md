@@ -181,17 +181,22 @@ its cloud image as a `.tar.xz` containing a 25 GiB `disk.raw`; the
 `kali-linux` entry declares `format: qcow2`, so the extracted raw disk is
 converted to qcow2 automatically.
 
-Downloads are streamed with `httpx` to `.<file>.part`, hashed on the
-fly, verified against the upstream checksum, and atomically renamed. Failures
-never touch an existing complete image. Interactive terminals render a rich
-progress bar (downloaded/total size, speed, and ETA); a resize-aware live
-renderer erases the reflowed snapshot when the terminal narrows, so resizing
-leaves no artifacts. Non-TTY output logs a throttled `current / total` line
-every 5 seconds. Pressing Ctrl+C keeps the bar at its current position,
-removes the partial `.part` file, and exits with `Operation cancelled.` and
-status 130. When the total size is unknown only the downloaded bytes are shown
-(no `? MB`). `images/.state.json` records the last successful download for
-version display only.
+Downloads, extraction, and format conversion run inside a per-run temporary
+directory under `images/.staging`, which sits on the same filesystem as the
+final image. The last step is therefore a true atomic `os.replace` rather than
+a cross-device copy. The staging directory is removed when the run ends,
+including on failure and on Ctrl+C. Each staging directory holds an exclusive
+`flock`, so if the process is killed outright the leftover is reclaimed by the
+next download without ever deleting an active download. Failures never touch an
+existing complete image. Interactive terminals render a rich progress bar
+(downloaded/total size, speed, and ETA); a resize-aware live renderer erases the
+reflowed snapshot when the terminal narrows, so resizing leaves no artifacts.
+Non-TTY output logs a throttled `current / total` line every 5 seconds. Pressing
+Ctrl+C keeps the bar at its current position, removes the staging directory,
+and exits with `Operation cancelled.` and status 130. When the total size is
+unknown only the downloaded bytes are shown (no `? MB`).
+`images/.state.json` records the last successful download for version display
+only.
 
 `create` uses the local file if it exists (never touches the network, even when
 a newer upstream exists). If it is missing, `image_policy: auto` (default)
@@ -495,12 +500,14 @@ my-internal:
 稀疏裸盘不会真占满虚拟大小。Kali Linux 的云镜像正是 `.tar.xz` 里包着 25 GiB 的
 `disk.raw`，`kali-linux` 条目声明了 `format: qcow2`，因此解压后会转换成 qcow2。
 
-下载使用 `httpx` 流式写入 `.<文件名>.part`，边下边算哈希，与上游校验和比对后
-原子重命名；失败不会破坏已有完整镜像。交互式终端通过 rich 渲染进度条
-（已下载/总量、速度与剩余时间），缩放感知的 Live 渲染器会在终端缩窄时
-擦除重排出的旧快照，缩放不留残影；非 TTY 环境每 5 秒追加一行
-`current / total`。按 Ctrl+C 时进度条停留在当前进度，半成品 `.part` 会被
-删除，并输出 `Operation cancelled.`、退出码 130。总量未知时只显示已下载
+下载、解压与格式转换都在 `images/.staging` 下按次创建的临时目录内完成，该目录
+与最终镜像位于同一文件系统，因此最后一步是真正的原子 `os.replace`，而不是跨设备
+复制。运行结束（含失败与 Ctrl+C）时暂存目录会被整体删除。每个暂存目录持有排他
+`flock`，进程被强杀后的残留由下一次下载回收，活跃下载不会被误删。失败不会破坏
+已有完整镜像。交互式终端通过 rich 渲染进度条（已下载/总量、速度与剩余时间），
+缩放感知的 Live 渲染器会在终端缩窄时擦除重排出的旧快照，缩放不留残影；非 TTY
+环境每 5 秒追加一行 `current / total`。按 Ctrl+C 时进度条停留在当前进度，暂存
+目录被清理，并输出 `Operation cancelled.`、退出码 130。总量未知时只显示已下载
 字节，不出现 `? MB`。`images/.state.json` 仅用于记录最近一次成功下载的版本。
 
 `create` 优先使用本地已有文件（即使上游有更新也绝不触网）；文件缺失时，
