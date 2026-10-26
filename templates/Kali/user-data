@@ -1,0 +1,18 @@
+#cloud-config
+ssh_pwauth: true
+users:
+  - name: cliff
+    groups: sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+chpasswd:
+  list: |
+    root:sec202609
+    cliff:sec202609
+  expire: false
+disable_root: false
+packages:
+  - bash-completion
+  - vim
+  - sudo
