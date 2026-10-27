@@ -41,6 +41,17 @@ write_files:
 
       [Install]
       WantedBy=multi-user.target
+
+  - path: /etc/docker/daemon.json
+    permissions: '0644'
+    content: |
+      {
+          "registry-mirrors": [
+              "https://docker.m.daocloud.io",
+              "https://hub.rat.dev"
+          ]
+      }
+      
 runcmd:
   - [growpart, /dev/vda, 4]
   - [xfs_growfs, /]
