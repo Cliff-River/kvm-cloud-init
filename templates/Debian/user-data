@@ -12,6 +12,7 @@ chpasswd:
     cliff:sec202609
   expire: false
 disable_root: false
+package_update: true
 packages:
   - vim
 runcmd:
