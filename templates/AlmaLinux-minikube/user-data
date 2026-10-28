@@ -83,16 +83,31 @@ runcmd:
     done
   - [ systemctl, enable, --now, docker ]
   - [ /usr/sbin/usermod, -aG, docker, cliff ]
-  # 安装 Minikube
-  - [
-      curl, -fLO,
-      --retry, 100, --retry-all-errors,
-      --retry-delay, 5, --retry-max-time, 600,
-      --connect-timeout, 60,
-      https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64 
-    ]
-  - [ install, minikube-linux-amd64, /usr/local/bin/minikube ]
-  - [ rm, minikube-linux-amd64 ]
+  # 安装 Minikube（优先 RPM，失败回退 GitHub 二进制；curl 自动重试）
+  - |
+    rpm_file=minikube-latest.x86_64.rpm
+    bin_file=minikube-linux-amd64
+    fetch() {
+      curl --retry 100 --retry-all-errors --retry-delay 5 \
+        --retry-max-time 600 --connect-timeout 60 -fLO "$1"
+    }
+    if fetch "https://storage.googleapis.com/minikube/releases/latest/$rpm_file" \
+       && rpm -Uvh "$rpm_file"; then
+      echo "Minikube 已通过 RPM 安装"
+      rm -f "$rpm_file"
+    elif fetch "https://github.com/kubernetes/minikube/releases/latest/download/$bin_file" \
+       && install "$bin_file" /usr/local/bin/minikube; then
+      echo "Minikube 已通过二进制安装"
+      rm -f "$bin_file"
+    else
+      rm -f "$rpm_file" "$bin_file"
+      echo "Minikube 安装失败" >&2
+      exit 1
+    fi
+    # RPM 可能装在 /usr/bin，为 systemd 单元统一准备 /usr/local/bin/minikube
+    if [ ! -x /usr/local/bin/minikube ]; then
+      ln -sf "$(command -v minikube)" /usr/local/bin/minikube
+    fi
   # 安装 kubectl 二进制文件
   - |
     kubectl_version=$(curl --retry 100 --retry-all-errors --retry-delay 5 \
