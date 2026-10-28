@@ -23,8 +23,12 @@ import paramiko
 from .config import project_root
 from .errors import SshError
 
-#: 连接超时（秒）
+#: 单次连接超时（秒）
 CONNECT_TIMEOUT = 10
+#: 连接失败后的重试间隔（秒）
+CONNECT_RETRY_INTERVAL = 2.0
+#: 连接失败后的重试总时长（秒）；调用方可用 deadline 覆盖
+CONNECT_RETRY_TIMEOUT = 60.0
 #: 读写缓冲区
 _BUFSIZE = 65536
 
@@ -93,27 +97,61 @@ def delete_keypair(instance: str) -> list[Path]:
     return removed
 
 
-def _connect(instance: str, host: str, user: str, key_path: Path) -> paramiko.SSHClient:
-    """建立 SSH 连接；主机密钥自动接受（适用于本地临时实例）。"""
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        client.connect(
-            hostname=host,
-            username=user,
-            key_filename=str(key_path),
-            timeout=CONNECT_TIMEOUT,
-            banner_timeout=CONNECT_TIMEOUT,
-            auth_timeout=CONNECT_TIMEOUT,
-            allow_agent=False,
-            look_for_keys=False,
-        )
-    except (paramiko.SSHException, OSError) as exc:
-        client.close()
-        raise SshError(
-            f"Cannot connect to instance {instance} ({user}@{host}): {exc}"
-        ) from exc
-    return client
+def _connect(
+    instance: str,
+    host: str,
+    user: str,
+    key_path: Path,
+    *,
+    deadline: float | None = None,
+    on_retry: Callable[[int, float], None] | None = None,
+) -> paramiko.SSHClient:
+    """建立 SSH 连接；主机密钥自动接受（适用于本地临时实例）。
+
+    实例刚启动时 IP 往往先于 sshd 就绪，连接失败按 ``CONNECT_RETRY_INTERVAL``
+    重试直到 ``deadline``（``time.monotonic()`` 绝对时间，缺省为当前时间 +
+    ``CONNECT_RETRY_TIMEOUT``）；认证失败不重试，重试不会改变结果。
+    """
+    if deadline is None:
+        deadline = time.monotonic() + CONNECT_RETRY_TIMEOUT
+    started = time.monotonic()
+    attempt = 0
+    while True:
+        attempt += 1
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                hostname=host,
+                username=user,
+                key_filename=str(key_path),
+                timeout=CONNECT_TIMEOUT,
+                banner_timeout=CONNECT_TIMEOUT,
+                auth_timeout=CONNECT_TIMEOUT,
+                allow_agent=False,
+                look_for_keys=False,
+            )
+        except paramiko.AuthenticationException as exc:
+            client.close()
+            raise SshError(
+                f"Cannot connect to instance {instance} ({user}@{host}): {exc}"
+            ) from exc
+        except (paramiko.SSHException, OSError) as exc:
+            client.close()
+            now = time.monotonic()
+            if now >= deadline:
+                waited = int(now - started)
+                suffix = f" after {waited}s" if waited >= 1 else ""
+                raise SshError(
+                    f"Cannot connect to instance {instance} ({user}@{host})"
+                    f"{suffix}: {exc}"
+                ) from exc
+            delay = min(CONNECT_RETRY_INTERVAL, deadline - now)
+            if on_retry is not None:
+                on_retry(attempt, delay)
+            time.sleep(delay)
+        else:
+            return client
 
 
 def _sync_window_size(chan: paramiko.Channel) -> None:
@@ -127,9 +165,19 @@ def _sync_window_size(chan: paramiko.Channel) -> None:
         pass
 
 
-def interactive_shell(instance: str, host: str, user: str, key_path: Path) -> int:
+def interactive_shell(
+    instance: str,
+    host: str,
+    user: str,
+    key_path: Path,
+    *,
+    deadline: float | None = None,
+    on_retry: Callable[[int, float], None] | None = None,
+) -> int:
     """打开交互式登录会话，返回远端退出码。"""
-    client = _connect(instance, host, user, key_path)
+    client = _connect(
+        instance, host, user, key_path, deadline=deadline, on_retry=on_retry
+    )
     try:
         # 透传本地 TERM 与窗口尺寸：paramiko 默认 term='vt100'，
         # 会导致远端程序误判终端不支持 256 色，输出全部退化为默认（灰）色。
@@ -204,14 +252,25 @@ def _stdio_is_tty() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def run_command(instance: str, host: str, user: str, key_path: Path, command: str) -> int:
+def run_command(
+    instance: str,
+    host: str,
+    user: str,
+    key_path: Path,
+    command: str,
+    *,
+    deadline: float | None = None,
+    on_retry: Callable[[int, float], None] | None = None,
+) -> int:
     """在远端执行一条命令，透传输出，返回远端退出码。
 
     本地 stdin/stdout 都是终端时（如 ``exec <实例> -- bash``）申请 PTY
     并双向转发，使远端交互式程序可正常使用；重定向或管道场景保持
     不分配 PTY，避免 CRLF 与终端格式污染。
     """
-    client = _connect(instance, host, user, key_path)
+    client = _connect(
+        instance, host, user, key_path, deadline=deadline, on_retry=on_retry
+    )
     try:
         if _stdio_is_tty():
             # 必须保留 stdin/stderr 文件对象：其析构会调用 shutdown_write，
@@ -254,9 +313,10 @@ def capture_command(
     command: str,
     *,
     timeout: float | None = None,
+    deadline: float | None = None,
 ) -> tuple[str, str, int]:
     """在远端执行命令并捕获输出，返回 ``(stdout, stderr, exit_code)``。"""
-    client = _connect(instance, host, user, key_path)
+    client = _connect(instance, host, user, key_path, deadline=deadline)
     try:
         _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
         out = stdout.read().decode("utf-8", "replace")
@@ -275,13 +335,14 @@ def stream_command(
     command: str,
     *,
     should_stop: Callable[[], bool] | None = None,
+    deadline: float | None = None,
 ) -> int:
     """流式执行远端命令，直到通道结束或 ``should_stop()`` 返回 True。
 
     用于 ``cloud-init log -f``：输出实时转发到本地 stdout/stderr；
     被 ``should_stop`` 提前终止时返回 0，正常结束时返回远端退出码。
     """
-    client = _connect(instance, host, user, key_path)
+    client = _connect(instance, host, user, key_path, deadline=deadline)
     try:
         _stdin, stdout, _stderr = client.exec_command(command)
         chan = stdout.channel

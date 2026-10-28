@@ -339,27 +339,37 @@ def test_shell_instance_passes_target(level_store, monkeypatch, tmp_path) -> Non
     key = _prepare_ssh_target(monkeypatch, tmp_path)
     captured = {}
 
-    def fake_shell(instance, host, user, key_path) -> int:
-        captured.update(instance=instance, host=host, user=user, key=key_path)
+    def fake_shell(instance, host, user, key_path, *, deadline=None, on_retry=None) -> int:
+        captured.update(
+            instance=instance, host=host, user=user, key=key_path, deadline=deadline
+        )
         return 0
 
     monkeypatch.setattr(ssh, "interactive_shell", fake_shell)
     assert provision.shell_instance(level_store, object(), "plain") == 0
-    assert captured == {"instance": "plain", "host": "10.0.0.5", "user": "cliff", "key": key}
+    assert captured["instance"] == "plain"
+    assert captured["host"] == "10.0.0.5"
+    assert captured["user"] == "cliff"
+    assert captured["key"] == key
+    # IP 等待与 sshd 连接重试共用同一个截止时间，不是两段独立的超时
+    assert captured["deadline"] is not None
 
 
 def test_exec_instance_joins_command(level_store, monkeypatch, tmp_path) -> None:
     _prepare_ssh_target(monkeypatch, tmp_path)
     captured = {}
 
-    def fake_run(instance, host, user, key_path, command) -> int:
-        captured.update(host=host, user=user, command=command)
+    def fake_run(instance, host, user, key_path, command, **kwargs) -> int:
+        captured.update(host=host, user=user, command=command, **kwargs)
         return 7
 
     monkeypatch.setattr(ssh, "run_command", fake_run)
     rc = provision.exec_instance(level_store, object(), "plain", ["ls", "-l", "/"])
     assert rc == 7
-    assert captured == {"host": "10.0.0.5", "user": "cliff", "command": "ls -l /"}
+    assert captured["host"] == "10.0.0.5"
+    assert captured["user"] == "cliff"
+    assert captured["command"] == "ls -l /"
+    assert captured["deadline"] is not None
 
 
 def test_shell_instance_requires_running_domain(level_store, monkeypatch) -> None:
@@ -393,7 +403,7 @@ def test_shell_instance_auto_starts_shutoff_domain(
     monkeypatch.setattr(
         access, "ssh_target", lambda conn, name: ("10.0.0.5", "cliff", key)
     )
-    monkeypatch.setattr(ssh, "interactive_shell", lambda *args: 0)
+    monkeypatch.setattr(ssh, "interactive_shell", lambda *args, **kwargs: 0)
 
     assert provision.shell_instance(level_store, object(), "plain") == 0
     assert started == ["plain"]
@@ -411,7 +421,7 @@ def test_shell_instance_does_not_restart_running_domain(
         "start_instance",
         lambda store, conn, name: started.append(name),
     )
-    monkeypatch.setattr(ssh, "interactive_shell", lambda *args: 0)
+    monkeypatch.setattr(ssh, "interactive_shell", lambda *args, **kwargs: 0)
 
     assert provision.shell_instance(level_store, object(), "plain") == 0
     assert started == []
@@ -467,7 +477,7 @@ def test_exec_instance_auto_starts_shutoff_domain(
         access, "ssh_target", lambda conn, name: ("10.0.0.5", "cliff", key)
     )
 
-    def fake_run(instance, host, user, key_path, command) -> int:
+    def fake_run(instance, host, user, key_path, command, **kwargs) -> int:
         captured.update(host=host, command=command)
         return 0
 

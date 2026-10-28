@@ -240,3 +240,92 @@ def test_interactive_shell_returns_remote_exit_status(
     assert rc == 5
     assert "hi" in capfd.readouterr().out
     assert client.closed is True
+
+
+# ---- 连接重试（IP 先于 sshd 就绪） ----
+
+
+class _ScriptedClient:
+    """按脚本抛出连接异常或成功的假 SSHClient。"""
+
+    def __init__(self, outcomes: list[object]) -> None:
+        self._outcomes = outcomes
+        self.closed = False
+
+    def set_missing_host_key_policy(self, _policy: object) -> None:
+        pass
+
+    def connect(self, **kwargs: object) -> None:
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _patch_clients(monkeypatch, outcomes: list[object]) -> list[_ScriptedClient]:
+    created: list[_ScriptedClient] = []
+
+    def factory() -> _ScriptedClient:
+        client = _ScriptedClient(outcomes)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(ssh.paramiko, "SSHClient", factory)
+    return created
+
+
+def test_connect_retries_until_sshd_accepts(monkeypatch) -> None:
+    refused = paramiko.SSHException("Unable to connect to port 22")
+    clients = _patch_clients(monkeypatch, [refused, refused, None])
+    clocks = iter([0.0, 1.0, 3.0])
+    monkeypatch.setattr(ssh.time, "monotonic", lambda: next(clocks))
+    sleeps: list[float] = []
+    monkeypatch.setattr(ssh.time, "sleep", lambda seconds: sleeps.append(seconds))
+    retries: list[tuple[int, float]] = []
+
+    client = ssh._connect(
+        "vm1",
+        "10.0.0.5",
+        "cliff",
+        Path("/k"),
+        deadline=100.0,
+        on_retry=lambda attempt, delay: retries.append((attempt, delay)),
+    )
+
+    assert client is clients[-1]
+    assert len(clients) == 3
+    assert clients[0].closed and clients[1].closed
+    assert sleeps == [ssh.CONNECT_RETRY_INTERVAL, ssh.CONNECT_RETRY_INTERVAL]
+    assert retries == [(1, ssh.CONNECT_RETRY_INTERVAL), (2, ssh.CONNECT_RETRY_INTERVAL)]
+
+
+def test_connect_gives_up_after_deadline(monkeypatch) -> None:
+    refused = paramiko.SSHException("Unable to connect to port 22")
+    clients = _patch_clients(monkeypatch, [refused, refused, refused])
+    clocks = iter([0.0, 50.0, 100.0])
+    monkeypatch.setattr(ssh.time, "monotonic", lambda: next(clocks))
+    monkeypatch.setattr(ssh.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(SshError, match=r"Cannot connect to instance vm1 .* after 100s"):
+        ssh._connect("vm1", "10.0.0.5", "cliff", Path("/k"), deadline=100.0)
+
+    assert len(clients) == 2
+    assert all(client.closed for client in clients)
+
+
+def test_connect_does_not_retry_authentication_failure(monkeypatch) -> None:
+    clients = _patch_clients(
+        monkeypatch, [paramiko.AuthenticationException("bad key")]
+    )
+    monkeypatch.setattr(ssh.time, "monotonic", lambda: 0.0)
+    sleeps: list[float] = []
+    monkeypatch.setattr(ssh.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with pytest.raises(SshError, match="Cannot connect to instance vm1"):
+        ssh._connect("vm1", "10.0.0.5", "cliff", Path("/k"), deadline=100.0)
+
+    assert len(clients) == 1
+    assert clients[0].closed
+    assert sleeps == []

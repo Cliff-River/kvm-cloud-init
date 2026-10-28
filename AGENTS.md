@@ -148,6 +148,12 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 - `hv/` 不叫 `libvirt/`，避免与第三方 libvirt 包同名。
 - paramiko 5.x 的 `Ed25519Key` 无 `generate()`：`ssh._generate_key` 用
   `getattr(..., "generate", None)` 探测，缺失时回退 `RSAKey.generate(3072)`。
+- SSH 连接重试在 `ssh._connect` 内：连接/握手失败每 `CONNECT_RETRY_INTERVAL`
+  （2s）重试到 `deadline`（`time.monotonic()` 绝对时间，缺省
+  `now + CONNECT_RETRY_TIMEOUT`=60s），认证失败立即失败不重试；
+  `shell`/`exec` 由 `access` 传入与 IP 等待共用的 300 秒 deadline，
+  首次重试打印 `Waiting for SSH on <ip> ...`。实例刚启动时 IP 常早于 sshd
+  就绪，只等 IP 会在握手阶段直接报 `Unable to connect to port 22`。
 - `virDomainInterfaceAddresses` 支持 SRC_LEASE / SRC_AGENT / SRC_ARP 三类来源。
 - `imagefetch.py` 的 HTTP 客户端可注入：测试用
   `httpx.Client(transport=httpx.MockTransport(handler))`，不建立真实连接。

@@ -88,11 +88,33 @@ def ssh_target(
     return host, user, key_path
 
 
+def _wait_note(host: str) -> Callable[[int, float], None]:
+    """连接重试首次发生时提示用户正在等待，避免看起来像卡死。"""
+    notified = False
+
+    def on_retry(_attempt: int, _delay: float) -> None:
+        nonlocal notified
+        if not notified:
+            notified = True
+            print(f"Waiting for SSH on {host} ...", flush=True)
+
+    return on_retry
+
+
 def shell_instance(store: ConfigStore, conn: libvirt.virConnect, name: str) -> int:
     """打开实例的 SSH 交互式登录会话，已关机时先自动启动，返回远端退出码。"""
     _ensure_running(store, conn, name)
-    host, user, key_path = wait_ssh_target(conn, name)
-    return ssh.interactive_shell(name, host, user, key_path)
+    # IP 就绪与 sshd 就绪共用同一个等待窗口：IP 常常早于 sshd 出现。
+    deadline = time.monotonic() + SSH_READY_TIMEOUT
+    host, user, key_path = wait_ssh_target(conn, name, deadline=deadline)
+    return ssh.interactive_shell(
+        name,
+        host,
+        user,
+        key_path,
+        deadline=deadline,
+        on_retry=_wait_note(host),
+    )
 
 
 def exec_instance(
@@ -100,5 +122,14 @@ def exec_instance(
 ) -> int:
     """在实例中执行一条命令（-- 之后的所有 token 拼接），已关机时先自动启动。"""
     _ensure_running(store, conn, name)
-    host, user, key_path = wait_ssh_target(conn, name)
-    return ssh.run_command(name, host, user, key_path, " ".join(command))
+    deadline = time.monotonic() + SSH_READY_TIMEOUT
+    host, user, key_path = wait_ssh_target(conn, name, deadline=deadline)
+    return ssh.run_command(
+        name,
+        host,
+        user,
+        key_path,
+        " ".join(command),
+        deadline=deadline,
+        on_retry=_wait_note(host),
+    )
