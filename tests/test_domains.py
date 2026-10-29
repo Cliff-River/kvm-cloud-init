@@ -232,6 +232,43 @@ def test_shutdown_timeout_without_force_raises(monkeypatch) -> None:
     assert dom.destroy_calls == 0
 
 
+def test_shutdown_resends_signal_then_forces_off(monkeypatch) -> None:
+    # 初次信号 + 两次重发（每次间隔 10s）后，第 3 次信号用尽即强制断电
+    _patch_clock(monkeypatch, [0.0, 10.0, 20.0, 30.0])
+    dom = _FakeShutdownDomain([libvirt.VIR_DOMAIN_RUNNING] * 4)
+    logs: list[str] = []
+    domains.shutdown_and_wait(
+        dom,
+        timeout=100,
+        force=True,
+        log=logs.append,
+        retry_interval=10,
+        max_attempts=3,
+    )
+    assert dom.shutdown_calls == 3
+    assert dom.destroy_calls == 1
+    assert any("resending shutdown signal (attempt 2 of 3)" in line for line in logs)
+    assert any("resending shutdown signal (attempt 3 of 3)" in line for line in logs)
+    assert any("forcing power off" in line for line in logs)
+
+
+def test_shutdown_stops_resending_without_force_and_times_out(monkeypatch) -> None:
+    # force=False 时信号次数用尽后不再重发，等满 timeout 再抛错
+    _patch_clock(monkeypatch, [0.0, 10.0, 20.0, 25.0])
+    dom = _FakeShutdownDomain([libvirt.VIR_DOMAIN_RUNNING] * 4)
+    with pytest.raises(ShutdownTimeout, match="did not shut down within 25s"):
+        domains.shutdown_and_wait(
+            dom,
+            timeout=25,
+            force=False,
+            log=lambda _line: None,
+            retry_interval=10,
+            max_attempts=2,
+        )
+    assert dom.shutdown_calls == 2
+    assert dom.destroy_calls == 0
+
+
 # ---- destroy_domain --------------------------------------------------------
 
 class _FakePool:

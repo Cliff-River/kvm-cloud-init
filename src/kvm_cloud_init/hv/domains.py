@@ -28,6 +28,12 @@ _UNDEFINE_FLAGS = (
     | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_TPM", 0)
 )
 
+# 关机信号重发策略：运行态实例每隔 SHUTDOWN_RETRY_INTERVAL 秒重发一次
+# ACPI 关机，最多发送 SHUTDOWN_MAX_ATTEMPTS 次（含首次）；次数用尽后仅在
+# 允许强制断电（--force）时直接 power off，否则继续等到 timeout 再报错。
+SHUTDOWN_RETRY_INTERVAL = 60
+SHUTDOWN_MAX_ATTEMPTS = 3
+
 
 def lookup_domain(conn: libvirt.virConnect, name: str) -> libvirt.virDomain | None:
     try:
@@ -139,8 +145,15 @@ def shutdown_and_wait(
     timeout: int,
     force: bool = False,
     log: Callable[[str], None] = print,
+    retry_interval: float = SHUTDOWN_RETRY_INTERVAL,
+    max_attempts: int = SHUTDOWN_MAX_ATTEMPTS,
 ) -> None:
-    """优雅关机并轮询到 shut off；超时按 force 决定强杀或报错。"""
+    """优雅关机并轮询到 shut off；超时按 force 决定强杀或报错。
+
+    运行中的实例每隔 ``retry_interval`` 秒重发一次 ACPI 关机信号，最多
+    发送 ``max_attempts`` 次；次数用尽后若 ``force`` 为真则直接强制断电，
+    否则不再发信号，继续等到 ``timeout`` 后报错。
+    """
     name = dom.name()
     progress = _ShutdownProgress(log)
     state = dom.state(0)[0]
@@ -148,25 +161,57 @@ def shutdown_and_wait(
         log(f"Instance {name} is already shut off.")
         return
 
+    now = time.monotonic()
+    deadline = now + timeout
+    attempts = 0
+    next_signal = now + retry_interval
     if state in (libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_BLOCKED):
         log(f"Instance {name} is running, sending shutdown signal ...")
         dom.shutdown()
+        attempts = 1
 
-    deadline = time.monotonic() + timeout
     last_tick = -1
-    while time.monotonic() < deadline:
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            break
         state = dom.state(0)[0]
         if state == libvirt.VIR_DOMAIN_SHUTOFF:
             progress.clear()
             log(f"Instance {name} has shut down.")
             return
-        elapsed = int(timeout - (deadline - time.monotonic()))
+        elapsed = int(timeout - (deadline - now))
         # 每 5 秒更新一次等待进度
         if elapsed - last_tick >= 5:
             last_tick = elapsed
             progress.report(
                 f"Waiting for instance {name} to shut down ... {elapsed}s elapsed"
             )
+        resendable = state in (
+            libvirt.VIR_DOMAIN_RUNNING,
+            libvirt.VIR_DOMAIN_BLOCKED,
+        )
+        if resendable and now >= next_signal:
+            if attempts < max_attempts:
+                attempts += 1
+                next_signal = now + retry_interval
+                progress.clear()
+                log(
+                    f"Instance {name} is still running; resending shutdown signal "
+                    f"(attempt {attempts} of {max_attempts}) ..."
+                )
+                dom.shutdown()
+            elif force:
+                progress.clear()
+                log(
+                    f"Instance {name} did not shut down after {attempts} shutdown "
+                    f"signal(s); forcing power off."
+                )
+                dom.destroy()
+                return
+            else:
+                # 信号次数已用尽且不允许强杀：不再重发，等 guest 自行完成关机
+                next_signal = float("inf")
         time.sleep(1)
 
     progress.clear()
