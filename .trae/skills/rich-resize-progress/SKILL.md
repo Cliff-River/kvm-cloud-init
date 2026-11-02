@@ -1,87 +1,98 @@
 ---
 name: rich-resize-progress
-description: Build rich terminal progress bars without artifacts on resize. Use when adding a rich Progress/Live bar or fixing reflow ghost lines after TTY resize. Not for GUI/web or non-rich renderers.
+description: Build polished rich terminal progress bars with adaptive columns, unknown totals, non-TTY fallback, safe close, and resize recovery. Use for Python CLI progress. Not for GUI, web, or non-rich renderers.
 ---
 
-# Rich 进度条缩放自愈
+# Rich 美观终端进度条
 
-用 rich `Progress`/`Live` 做 TTY 进度条，并解决终端缩放（尤其缩窄）后上方
-残留旧帧快照的问题。完整可复制实现见 `assets/resize_aware_live.py`；
-PTY 验证方法与排错见 `references/resize-testing.md`。
+用 rich `Progress`/`Live` 构建下载或长任务进度条：TTY 下提供清晰、宽度自适应
+的一帧式界面，非 TTY 下输出可读日志，并正确处理未知总量、取消和终端缩放。
+完整可复制实现见 `assets/download_progress.py`；测试与排错见
+`references/resize-testing.md`。
 
-## 适用与不适用
+## 1. 先定义简单的表现层接口
 
-- 适用：Python + rich 的下载/长任务进度条，要求保留 rich 视觉效果
-  （彩条、已下载/总量、速度、ETA）且缩放终端不留残影。
-- 不适用：GUI/Web 进度条；自绘（非 rich）渲染器；日志流里不需要就地
-  刷新的场景（直接定期 print 即可）。
+- 对业务层只暴露 `update(done, total)` 与 `close()`；`total=None` 表示总量未知。
+  下载、重试、清理和取消语义留在业务层，进度对象只负责显示。
+- 业务编排通过工厂注入进度实现，避免核心下载逻辑直接依赖 rich。
+- 构造函数接收可选 `stream`，缺省用 `sys.stdout`；用 `stream.isatty()` 选择
+  TTY 或降级路径。可注入流比依赖全局 `Console.is_terminal` 更容易测试。
+- 首次 `update` 再创建 rich 对象；保存 task ID，后续只更新同一 task。
+- 用 `_closed` 保证 close 幂等，并让 close 后的 update 安全忽略。
 
-## 根因：rich 的相对定位在缩窄时失算
+## 2. 组合美观且自适应的 TTY 界面
 
-rich `Live` 每帧渲染后，`LiveRender._shape` 记录上一帧的 `(width, height)`
-（旧宽度下的**逻辑行数**）。下一帧先按 `height - 1` 次 `CURSOR_UP` 回到
-渲染起点再覆盖：
+按“标签 → 进度条 → 已下载/总量 → 速度 → ETA”的顺序配置列：
 
-1. 终端**缩窄**：已输出的物理行被终端 reflow 成更多视觉行，rich 仍按旧
-   `height` 上移 → 光标回不到真正的起点，旧快照残留在上方。
-2. 终端**变宽**：rich 逻辑行之间是显式 `\n`，终端不会把两行合并成一行，
-   原生定位仍然正确——**变宽不需要任何介入**。
-3. 不要自己处理 SIGWINCH：rich 自动刷新线程默认 10Hz，缩放后最迟 0.1s
-   下一帧就会触发修复逻辑。
+- `TextColumn("[bold]{task.description}")`：突出任务名。
+- `BarColumn(bar_width=None)`：让彩条占据剩余宽度，终端变宽变窄都能自适应。
+- `DownloadColumn` 的定制子类：显示字节进度，并处理未知总量。
+- `TransferSpeedColumn()` 与 `TimeRemainingColumn()`：提供速度和剩余时间。
 
-## 实现步骤
+用 `Console(file=stream)` 构造 `Progress`，保留 `auto_refresh=True`、
+`transient=False`、`redirect_stdout=False`、`redirect_stderr=False`：
+自动刷新负责动画，非 transient 保留最终帧，关闭重定向避免吞掉业务输出。
+`start()` 后只 `add_task` 一次，之后用 `update(completed=done, total=total)`。
 
-1. 子类化 `rich.live.Live`，只重写 `process_renderables`：
-   - 读 `self._live_render._shape`；为 `None`（首帧）直接放行。
-   - 仅当 `self.console.is_interactive` 且 `0 < new_width < old_width` 时介入。
-   - 用**旧宽度**重新布局当前帧，逐行估算在新宽度下 reflow 的视觉行数：
-     `console.options.update(width=old_width)` → `console.render_lines(...)`
-     → 对每行 `ceil(Segment.get_line_length(line) / new_width)` 求和。
-   - 视觉行数与旧 height 不同，就在 renderables 头部插入擦除控制序列，
-     并把 `live_render._shape = None`（让父类跳过按旧 height 的相对上移），
-     再 `return super().process_renderables(renderables)`。
-2. 擦除序列的上移次数是 **`rows - 1`，不是 `rows`**。reflow 后光标停在
-   内容区最后一行的行尾：先 `CARRIAGE_RETURN` + `ERASE_IN_LINE(2)` 清当前
-   行，再上移 `rows - 1` 次、每次清行，恰好覆盖 `rows` 个视觉行并停在
-   首行行首。多上移一次会抹掉进度区上方已保留的普通输出（如下载提示行）。
-3. 构造 `rich.progress.Progress(...)` 后、`start()` 前，把内部 live 换成
-   子类实例，参数（console、refresh_per_second、transient、redirect_*、
-   `get_renderable=progress.get_renderable`）与 Progress 内部构造保持一致。
-4. 总量未知（chunked 响应、HEAD 不可用）时子类化 `DownloadColumn`：
-   `task.total is None` 只渲染 `filesize.decimal(completed)`，避免出现
-   rich 默认的 `? MB`。
-5. `close()` 只调 `progress.stop()`，**绝不要先把 completed 补成 total**——
-   取消下载（Ctrl+C）时最终一帧必须停在当前进度。stop 自带最后一帧刷新。
-6. 非交互终端（重定向/CI）走降级路径：按固定间隔（如 5 秒）追加
-   `current / total (pct%)` 文本行，用 `stream.isatty()` 判定，不要依赖
-   `Console.is_terminal`（可注入的假流更容易测）。
-7. Ctrl+C 行为放在调用层：取消时删除半成品文件（如 `.part`）、输出
-   `Operation cancelled.`、退出码 130；进度对象本身不感知取消语义。
+## 3. 未知总量也要显示得完整
+
+chunked 响应或 HEAD 不可用时会得到 `total=None`。子类化 `DownloadColumn`，
+此时只渲染 `filesize.decimal(int(task.completed))`，否则交给父类；不要显示
+rich 默认的 `? MB`，也不要伪造总量、百分比或 ETA。
+
+## 4. 非 TTY 降级为节流日志
+
+重定向和 CI 不输出控制序列，改为追加文本行：
+
+- 用固定间隔（如 5 秒）节流，格式为 `current / total (pct%)` 并 `flush=True`。
+- 首条有效进度和完成行必须输出；未知总量且 `done == 0` 时不打印空进度。
+- 未知总量只显示已下载字节；完成行不受节流间隔抑制。
+- 保持单位口径明确：rich 默认用十进制 MB，自定义纯文本可用 MiB；测试不要
+  混淆两种单位。
+
+## 5. 结束与取消不能伪造 100%
+
+`close()` 只调用 `progress.stop()`，由 stop 刷新最后一帧。**绝不要先把
+completed 补成 total**：取消时最终帧必须停在实际进度。重复 close、close 后
+update 都应安全。Ctrl+C 的半成品清理、提示和退出码由调用层处理。
+
+## 6. 终端缩窄时清除 reflow 残影
+
+美观不仅来自列配置，也来自缩放后的稳定性。rich 用 `LiveRender._shape` 中
+旧帧的 `(width, height)` 做相对定位；缩窄后终端把旧物理行 reflow 成更多视觉行，
+rich 仍按旧 height 上移，旧快照便残留在上方。变宽不会合并显式换行分隔的
+逻辑行，因此无需介入。
+
+1. 子类化 `rich.live.Live`，只重写 `process_renderables`：首帧 `_shape is None`
+   直接放行；仅在交互终端且 `0 < new_width < old_width` 时处理。
+2. 用旧宽度重新布局当前帧：`console.options.update(width=old_width)` →
+   `console.render_lines(...)`，再对每行按新宽度求
+   `ceil(Segment.get_line_length(line) / new_width)` 并求和。
+3. 视觉行数变化时，在 renderables 头部插入擦除序列，并把
+   `live_render._shape = None`，防止父类再按旧 height 上移，最后调用父类。
+4. 擦除时先 `CARRIAGE_RETURN` + `ERASE_IN_LINE(2)` 清当前行，再上移
+   **`rows - 1` 次**并逐行清除。多上移一次会抹掉进度区上方的普通输出。
+5. 构造 `Progress` 后、`start()` 前替换内部 live；console、refresh 频率、
+   transient、redirect 开关和 `get_renderable=progress.get_renderable` 与原构造
+   保持一致。
+6. 不处理 SIGWINCH：rich 自动刷新线程默认 10Hz，下一帧会自然触发自愈。
 
 ## 交付前检查
 
-- 缩窄 hook 只在 `new_width < old_width` 触发；变宽走 rich 原生路径。
-- 擦除上移次数 = 视觉行数 − 1；`_shape` 置空后父类不再二次上移。
-- 首帧（`_shape is None`）与非交互终端不触发 hook。
-- close 幂等：重复调用、close 后再 update 都安全。
-- 保留 rich 原有重定向开关（`redirect_stdout/stderr=False`），避免吞掉
-  业务线程的 print。
-- 单测见 `references/resize-testing.md`：必须覆盖缩窄、变宽、首帧、
-  未知总量、close 不补满。
+- TTY 同时具有任务名、彩条、字节进度、速度和 ETA，彩条随终端宽度伸缩。
+- 未知总量不出现 `? MB`；非 TTY 无 ANSI 控制序列且按间隔输出。
+- close 不补满、幂等，close 后 update 不出帧；业务 print 不被 rich 吞掉。
+- 首帧不上移；缩窄恰好上移视觉行数 − 1 次；变宽走 rich 原生路径。
+- 单测覆盖上述行为，真实残影用 PTY 验证，方法见
+  `references/resize-testing.md`。
 
-## 固有边界（如实告知用户）
+## 固有边界
 
-终端模拟器若在物理缩放后、reflow 完成前才读到一帧旧宽度输出（写入端
-无法感知的极小调度窗口），该帧可能越过估算区域；下一帧（≤0.1s）恢复
-正常。这是所有相对定位 TUI（含原生 rich）的共同边界，不是本方案缺陷。
+终端模拟器若在物理缩放后、reflow 完成前才读到一帧旧宽度输出，该帧可能越过
+估算区域；下一帧（通常不超过 0.1 秒）恢复。这是相对定位 TUI 的共同边界。
 
-## 已证伪的岔路（不要重走）
+## 已证伪的岔路
 
-1. **自绘 `\r` + `\x1b[2K` + SIGWINCH 单行渲染**：能修残影但失去 rich
-   视觉效果（彩条/速度/ETA/宽度自适应），用户明确不接受降级。
-2. **DECSC/DECRC（`\x1b7`/`\x1b8`）绝对锚定**：DECSC 保存的是绝对行号，
-   reflow 后内容下移而保存点不动，回锚会误擦上方 header；变宽时还残留
-   1 列。相对清除才是正确模型。
-3. **SIGWINCH 触发立即重绘**：无必要且更脆——rich 10Hz 刷新线程本身就
-   会在缩放后下一帧调到 `process_renderables`，信号处理反而引入与刷新
-   线程的竞态。
+1. 自绘 `\r` + 清行 + SIGWINCH：会失去 rich 的彩条、速度、ETA 和宽度自适应。
+2. DECSC/DECRC 绝对锚定：reflow 后保存点不随内容移动，可能误擦上方输出。
+3. SIGWINCH 立即重绘：无必要，并会引入与 rich 刷新线程的竞态。
