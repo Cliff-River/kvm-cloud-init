@@ -165,7 +165,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     cp_cmd = sub.add_parser(
         "cp",
-        help="copy a regular file between the host and an instance over SFTP",
+        help="copy a file or directory between the host and an instance over SFTP",
     )
     cp_cmd.add_argument(
         "source",
@@ -175,6 +175,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "target",
         help="local path or instance path in the form '<instance>:<path>'; "
         "exactly one of source/target must be an instance path",
+    )
+
+    sync_cmd = sub.add_parser(
+        "sync",
+        help="mirror a directory between the host and an instance "
+        "(rclone sync semantics: extra destination files are deleted)",
+    )
+    sync_cmd.add_argument(
+        "source",
+        help="source directory: local path or instance path "
+        "in the form '<instance>:<path>'; a relative remote path resolves "
+        "from the remote login user's home directory",
+    )
+    sync_cmd.add_argument(
+        "target",
+        help="target directory that becomes a mirror of source: local path or "
+        "instance path in the form '<instance>:<path>' (a relative remote "
+        "path resolves from the remote login user's home directory); exactly "
+        "one of source/target must be an instance path; entries missing in "
+        "source are deleted from target",
     )
 
     mount_cmd = sub.add_parser(
@@ -330,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "cp":
             return provision.copy_file(store, conn, args.source, args.target)
+        elif args.command == "sync":
+            return provision.sync_paths(store, conn, args.source, args.target)
         elif args.command == "mount":
             return provision.mount_instance(
                 store, conn, args.name, args.local_dir, args.guest_dir

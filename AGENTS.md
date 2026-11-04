@@ -26,7 +26,7 @@
 │   ├── __init__.py             # __version__ + main() 入口
 │   ├── cli.py                  # argparse: create/destroy/start/stop/reboot/status/
 │   │                           #   list/templates/shell(+--port-forward)/exec/
-│   │                           #   cp/mount/unmount/cloud-init/images
+│   │                           #   cp/sync/mount/unmount/cloud-init/images
 │   ├── config.py               # 配置加载、校验、三级合并、镜像目录合并
 │   ├── catalog.py              # 内置镜像预设 + 确定性渲染 images.conf
 │   ├── imagefetch.py           # 目录页解析、校验和、流式下载、压缩包解压、.state.json
@@ -36,8 +36,8 @@
 │   ├── qcow2.py                # qcow2 头 / parse_size / backing chain
 │   ├── portforward.py          # paramiko direct-tcpip 本地端口转发（ssh -L 简化版）
 │   ├── ssh.py                  # 密钥生成/复用/删除、paramiko 连接、shell/exec、
-│   │                           #   SFTP 上传/下载（cp）、端口转发挂接、
-│   │                           #   capture_command / stream_command
+│   │                           #   SFTP 上传/下载（cp）、目录镜像同步（sync）、
+│   │                           #   端口转发挂接、capture_command / stream_command
 │   ├── provision/              # 业务编排包（对外由 __init__.py 导出）
 │   │   ├── __init__.py         # 统一导出公共 API
 │   │   ├── guard.py            # 删除保护级别把关、production 交互确认
@@ -45,6 +45,7 @@
 │   │   ├── lifecycle.py        # start/stop/reboot/status/destroy
 │   │   ├── access.py           # SSH 目标解析与 shell/exec 编排
 │   │   ├── transfer.py         # cp：SFTP 上/下行与 <实例>:<路径> 方向解析
+│   │   ├── sync.py             # sync：目录镜像（rclone sync 语义，删除目标多余条目）
 │   │   ├── mounts.py           # mount/unmount：9p 热插拔 + guest 内挂载编排
 │   │   ├── listing.py          # list / templates
 │   │   ├── images.py           # images init/refresh/list/check/pull + ensure_image
@@ -116,6 +117,18 @@
   存在目录时追加源 basename；不调 scp/sftp。错误经 `_sftp_reason`/
   `_local_reason` 分类（路径不存在、权限拒绝、本地父目录缺失、裸
   `Failure` 等），不得把 paramiko 的 `Failure` 直接展示给用户。
+- sync：`provision/sync.py` 复用 `transfer.parse_remote` 判方向（双远程/双
+  本地均报错），复用 access 的自动启动与 SSH 等待；能力层在 `ssh.py`
+  （`sync_to_remote`/`sync_from_remote` + `SyncStats`）。语义为 `rclone sync`
+  而非 rsync：两端必须都是目录，同步的是源目录**内容**，目标中源已不存在
+  的条目递归删除（文件/目录/符号链接各计 1）；远端路径可相对（相对 SFTP
+  默认目录即登录用户家目录，与 cp/scp 一致，`_ensure_remote_dirs` 同时支持
+  绝对/相对路径逐级创建）；普通文件以 size + 整数秒 mtime 判重，传输后
+  utime 保留源 mtime；符号链接比对 readlink 目标，类型不匹配（文件↔目录↔
+  链接）先删后建；仅支持普通文件/目录/符号链接。本地或远端路径为 `/` 一律
+  拒绝（下载方向的远端源 `/` 也拒绝；`_guard_remote/local_sync_target`），
+  目标已存在但非目录报错；成功输出 `Synced <src> -> <dst> (...)` 并逐行
+  打印 `  deleted <path>`。不调 rsync/rclone/ssh 子进程。
 - mount/unmount：`provision/mounts.py` 先校验本地目录存在与 guest 绝对路径，
   `hv/filesystem.py` 在持久域 XML 的 `<kci:mounts>` 元数据中登记
   `<mount tag/source/target>` 并插入 9p `<filesystem type='mount'
@@ -148,6 +161,7 @@ uv run kvmci cloud-init log <实例名> [-f]
 uv run kvmci shell <实例名> [--port-forward 8080:80,443:443]
 uv run kvmci exec <实例名> -- <命令>
 uv run kvmci cp <本地|实例:路径> <实例:路径|本地>
+uv run kvmci sync <本地目录|实例:目录> <实例:目录|本地目录>
 uv run kvmci mount <实例名> <本地目录> <虚拟机目录>
 uv run kvmci unmount <实例名> <虚拟机目录>
 ```

@@ -108,6 +108,7 @@ uv run kvmci destroy rocky-llm
 | `shell <name> [--port-forward LPORT:RPORT[,LPORT:RPORT...]]` | Open an interactive SSH session. Starts the instance first if it is shut off, then waits for an IPv4 address and for sshd to accept the key. Uses the instance's private key and the **actual** IPv4 address discovered from libvirt (DHCP lease → qemu-guest-agent → ARP), never the address declared in `network-config`. IP resolution and SSH handshake retries share one 300-second window (retry every 2 seconds); the first retry prints `Waiting for SSH on <ip> ...`. `--port-forward 8080:80,443:443` forwards instance ports to `127.0.0.1` on the host for the lifetime of the shell (equivalent to `ssh -L`, multiplexed over the same paramiko connection). |
 | `exec <name> -- <command>` | Run one command over SSH; starts the instance first if it is shut off. Everything after `--` is joined and passed to the remote shell; stdout/stderr are streamed and the remote exit status becomes the `kvmci` exit code. When local stdin and stdout are both terminals (e.g. `exec <name> -- bash`) a PTY is allocated and forwarded bidirectionally; redirects and pipes keep the non-PTY streaming path. Connection retries behave exactly like `shell`. |
 | `cp <source> <target>` | Copy a file, or recursively copy a directory (symlinks preserved), between the host and an instance over SFTP (no `scp`/`sftp` subprocess). Instance paths use the `<name>:<path>` form, e.g. `kvmci cp ./app.conf vm1:/etc/app.conf`, `kvmci cp ./kube vm1:/srv/kube` or `kvmci cp vm1:kube ~/` (directories are always recursive); exactly one side must be remote (instance-to-instance is not supported). If the destination side is an existing directory, the source basename is appended, like `scp`. Starts the instance first if it is shut off. Errors report the concrete cause (remote/local path not found, permission denied, missing local parent directory, SFTP failure, connection failure). |
+| `sync <source> <target>` | Mirror a **directory** between the host and an instance with `rclone sync` semantics (not rsync): the target becomes an exact copy of the source contents, so entries that no longer exist in the source are **deleted** from the target, including extra files and whole directory trees. Both directions work: `kvmci sync ./site vm1:/srv/site` and `kvmci sync vm1:/srv/site ./site`; a relative remote path such as `vm1:kube/site` resolves from the remote login user's home directory, just like `cp`/scp (and missing parent directories are created). Unchanged regular files (same size **and** mtime) are skipped, mtimes are preserved on transfer, directories recurse and symbolic links are recreated (a changed link target or a file/directory type mismatch replaces the destination entry). Both sides must be directories, exactly one side must be remote, and syncing to `/` (local or remote, as source or target) is refused. Prints transfer/create/delete counts and lists every deleted path. Runs over the same paramiko SFTP connection (no `rsync`/`rclone`/`ssh` subprocess) and starts the instance first if it is shut off. |
 | `mount <name> <local_dir> <guest_dir>` | Share a host directory into a running instance via a libvirt 9p filesystem device and mount it at the absolute `guest_dir` (`mount -t 9p -o trans=virtio,...`). The device is persisted in the domain XML and recorded in kci metadata; a failed guest mount is rolled back. The guest kernel must support 9p (`CONFIG_9P_FS`, `CONFIG_NET_9P_VIRTIO`); non-root SSH users need passwordless sudo (`sudo -n`). |
 | `unmount <name> <guest_dir>` | Unmount the share inside the guest and detach the 9p device from the live and persistent domain configuration. A busy mount point aborts before detaching; host files are never deleted. |
 
@@ -115,7 +116,15 @@ uv run kvmci destroy rocky-llm
 
 `cp` streams files over the same paramiko-managed SSH connection used by
 `shell`/`exec` (SFTP subsystem) — files are copied individually and
-directories recursively (symbolic links recreated as links). `--port-forward`
+directories recursively (symbolic links recreated as links). `sync` uses the
+same transport but mirrors a whole directory with `rclone sync` semantics:
+after the run the target contains exactly the source tree, so anything
+missing from the source is deleted on the target (a second run with no
+changes transfers nothing). Regular files are compared by size and integer
+mtime, which is why transferred files keep their source mtime; only regular
+files, directories and symbolic links are supported. Because sync deletes
+data, syncing onto `/` on either side is refused, an existing non-directory
+target aborts the run, and every removed path is printed. `--port-forward`
 binds each local port on `127.0.0.1` only and closes every listener when the
 shell exits. Shared directories use the 9p `passthrough` access mode; because
 QEMU runs under `qemu:///system`, the host directory must be
@@ -452,13 +461,19 @@ uv run kvmci destroy rocky-llm
 | `shell <名称> [--port-forward 本地端口:虚拟机端口,...]` | 打开 SSH 交互式登录会话；实例已关机时先自动启动，等待 IPv4 就绪并等待 sshd 接受密钥。使用实例私钥与 libvirt 实测 IPv4 地址（DHCP 租约 → qemu-guest-agent → ARP 依次回退），绝不信任 `network-config` 中声明的地址。IP 等待与 SSH 握手重试共用同一个 300 秒等待窗口（每 2 秒重试），首次重试打印 `Waiting for SSH on <ip> ...`。`--port-forward 8080:80,443:443` 在 shell 存活期间把实例端口转发到宿主机 `127.0.0.1`（等价 `ssh -L`，复用同一条 paramiko 连接） |
 | `exec <名称> -- <命令>` | 执行一条命令；实例已关机时先自动启动并等待 IPv4 与 SSH 就绪。`--` 之后的所有参数拼接后交给远端 shell，实时透传 stdout/stderr，远端退出码即 `kvmci` 退出码。本地 stdin 与 stdout 均为终端时（如 `exec <名称> -- bash`）申请 PTY 并双向转发，交互式程序可正常使用；重定向或管道仍走无 PTY 的流式路径。连接重试行为与 `shell` 一致 |
 | `cp <源> <目标>` | 经 SFTP 在宿主机与实例之间拷贝文件，目录递归拷贝并保留符号链接（不调用 `scp`/`sftp` 子进程）。实例路径写作 `<名称>:<路径>`，如 `kvmci cp ./app.conf vm1:/etc/app.conf`、`kvmci cp ./kube vm1:/srv/kube`、`kvmci cp vm1:kube ~/`；两端必须恰好一个是实例路径（不支持实例间对拷）。目标端是已存在目录时与 `scp` 一样自动追加源文件名。实例已关机时先自动启动。错误会给出具体原因（远端/本地路径不存在、权限拒绝、本地父目录缺失、SFTP 拒绝操作、连接失败） |
+| `sync <源> <目标>` | 在宿主机与实例之间**镜像同步目录**，语义类似 `rclone sync`（不是 rsync）：目标会成为源内容的精确镜像，源中已不存在的条目（含多余文件与整棵目录树）会从目标中**删除**。支持双向：`kvmci sync ./site vm1:/srv/site` 与 `kvmci sync vm1:/srv/site ./site`；远端也支持相对路径（如 `vm1:kube/site`），与 `cp`/scp 一样相对于登录用户家目录解析，缺失的父目录会自动逐级创建。普通文件 size 与 mtime 都相同则跳过，传输时保留 mtime，目录递归、符号链接按链接重建（链接目标变化或文件/目录类型不匹配时替换目标条目）。两端必须都是目录、恰好一端是实例路径，且拒绝以本地或远端的 `/` 作为源或目标。结束后打印传输/新建/删除计数并逐条列出被删路径。复用同一条 paramiko SFTP 连接（不调用 `rsync`/`rclone`/`ssh` 子进程），实例已关机时先自动启动 |
 | `mount <名称> <本地目录> <虚拟机目录>` | 通过 libvirt 9p filesystem 设备把宿主机目录共享给运行中的实例，并挂载到 guest 内绝对路径（`mount -t 9p -o trans=virtio,...`）。设备持久化到域 XML 并登记到 kci 元数据；guest 内挂载失败会自动回滚。要求 guest 内核支持 9p（`CONFIG_9P_FS`、`CONFIG_NET_9P_VIRTIO`）；非 root 的 SSH 用户需要免密 sudo（`sudo -n`） |
 | `unmount <名称> <虚拟机目录>` | 在 guest 内卸载共享，并从运行态与持久域配置中 detach 9p 设备；挂载点忙时拒绝卸载且不会 detach，宿主机文件不会被删除 |
 
 ### 文件拷贝、端口转发与共享目录
 
 `cp` 复用 `shell`/`exec` 的 paramiko SSH 连接（SFTP 子系统）传输，
-文件逐个传输、目录递归拷贝，符号链接按链接重建。`--port-forward` 只监听宿主机
+文件逐个传输、目录递归拷贝，符号链接按链接重建。`sync` 复用同一传输通道，
+但按 `rclone sync` 语义镜像整个目录：同步后目标与源目录内容完全一致，源中
+缺失的条目会在目标侧删除（无变更时再跑一次不传输任何内容）。普通文件按
+size 与整数秒 mtime 判重，因此传输后保留源 mtime；仅支持普通文件、目录与
+符号链接。由于 sync 会删除数据，本地或远端目标为 `/` 时一律拒绝，目标已
+存在但不是目录时中止，并逐条打印被删除的路径。`--port-forward` 只监听宿主机
 `127.0.0.1`，shell 退出后统一关闭监听。共享目录使用 9p `passthrough`
 模式；由于 QEMU 以 `qemu:///system` 运行，本地目录需要对 QEMU 运行用户
 可读可写（请自行调整目录权限/ACL）。

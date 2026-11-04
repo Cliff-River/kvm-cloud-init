@@ -9,7 +9,7 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 
 - `cli.py`：只做 argparse 参数解析、表格输出与异常到退出码的转换，不写业务逻辑。
   子命令：create/destroy/start/stop/reboot/status/list/templates/shell/exec/
-  cp/mount/unmount/cloud-init/images。
+  cp/sync/mount/unmount/cloud-init/images。
 - `config.py`：五份 YAML 配置（default/images/images.user/templates/instances）
   的加载、校验、三级合并（实例 > 模板 > 默认值），以及镜像目录三层合并
   （内置预设 > images.conf > images.user.conf）。
@@ -28,7 +28,8 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
   paramiko 连接、交互 shell 与一次性 exec（不调用 `ssh`/`ssh-keygen` 子进程）；
   另有 `capture_command`（捕获输出）与 `stream_command`（流式跟随）供 cloud-init 使用；
   SFTP 上传/下载（`cp`，不调用 `scp`/`sftp` 子进程；文件直传、目录递归、
-  保留符号链接，SFTP/本地错误必须翻译成具体英文原因）与端口转发挂接。
+  保留符号链接，SFTP/本地错误必须翻译成具体英文原因）、目录镜像同步
+  （`sync`，rclone sync 语义）与端口转发挂接。
 - `portforward.py`：`ssh -L` 简化版——`127.0.0.1` 本地监听 + 同一 paramiko
   Transport 的 `direct-tcpip` channel，纯标准库 socketserver/select 搬运。
 - `hv/`：所有 libvirt 交互。`client`（连接/存储池/状态名）、`firmware`（UEFI 检测）、
@@ -40,6 +41,7 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 - `provision/`：业务编排包，按职责拆分：`guard`（保护级别）、`create`（创建 + 等待）、
   `lifecycle`（start/stop/reboot/status/destroy）、`access`（shell/exec）、
   `transfer`（cp：SFTP 上下行与 `<实例>:<路径>` 方向解析）、
+  `sync`（sync：目录镜像，rclone sync 语义，删除目标多余条目）、
   `mounts`（mount/unmount：9p 热插拔 + guest 内 mount/umount，sudo -n 提权）、
   `listing`（list/templates）、`images`（images init/refresh/list/check/pull
   与 create 的 ensure_image）、`progress`（终端进度输出：rich 进度条与缩放自愈）、
@@ -99,6 +101,17 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 16. `images check` 默认只查模板引用的镜像，`--all` 查整个目录；
     `images pull --all` 恰为模板引用镜像的去重集合；`pull` 无 ID 且无 `--all`
     时退出码 2。
+17. `sync` 是 `rclone sync` 语义而非 rsync：两端必须都是目录（恰好一端是
+    实例路径），同步源目录**内容**，目标中源已不存在的条目一律递归删除
+    （文件/目录/符号链接逐个计数并逐条打印 `deleted <path>`）；远端路径
+    既支持绝对路径也支持相对路径（相对 SFTP 默认目录即登录用户家目录，与
+    cp/scp 一致；`_ensure_remote_dirs` 必须同时支持两种路径逐级创建）；
+    普通文件按 size + 整数秒 mtime 判重，传输后 utime 保留源 mtime，符号链接
+    比对 readlink 目标，类型不匹配先删后建，仅支持普通文件/目录/符号链接；
+    本地或远端路径为 `/` 一律拒绝（源或目标均拒绝），目标已存在但非目录
+    报错；全程 paramiko SFTP，禁止调用 rsync/rclone/ssh 子进程；能力在
+    `ssh.sync_to_remote` / `sync_from_remote`，编排在 `provision/sync.py`
+    （复用 `transfer.parse_remote` 与 access 的自动启动/SSH 等待）。
 
 ## 常用命令
 
@@ -119,6 +132,7 @@ uv run kvmci cloud-init log <实例名> [-f]
 uv run kvmci shell <实例名> [--port-forward 8080:80,443:443]
 uv run kvmci exec <实例名> -- <命令>
 uv run kvmci cp <本地|实例:路径> <实例:路径|本地>
+uv run kvmci sync <本地目录|实例:目录> <实例:目录|本地目录>
 uv run kvmci mount <实例名> <本地目录> <虚拟机目录>
 uv run kvmci unmount <实例名> <虚拟机目录>
 uv run kvmci destroy <实例名> [--force] [--yes]

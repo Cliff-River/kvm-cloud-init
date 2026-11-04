@@ -25,8 +25,8 @@ class FakeSFTP:
         self.closed = False
 
     def _p(self, remote: str) -> Path:
-        if not remote.startswith("/"):
-            raise OSError("not absolute")
+        # 与真实 SFTP 一致：相对路径（不以 / 开头）相对于默认目录解析，
+        # FakeSFTP 的默认（家）目录即 root。
         return self.root / remote.lstrip("/")
 
     def stat(self, remote: str) -> paramiko.SFTPAttributes:
@@ -67,6 +67,12 @@ class FakeSFTP:
 
     def remove(self, remote: str) -> None:
         self._p(remote).unlink()
+
+    def rmdir(self, remote: str) -> None:
+        self._p(remote).rmdir()
+
+    def utime(self, remote: str, times: tuple[float, float]) -> None:
+        os.utime(self._p(remote), times)
 
     def close(self) -> None:
         self.closed = True

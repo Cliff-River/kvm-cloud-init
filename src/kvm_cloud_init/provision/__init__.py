@@ -7,6 +7,7 @@
 - ``lifecycle``：start / stop / reboot / status / destroy
 - ``access``：SSH 目标解析与 shell / exec
 - ``transfer``：宿主机与实例之间的 SFTP 文件拷贝（cp）
+- ``sync``：宿主机与实例之间的目录镜像同步（sync，rclone sync 语义）
 - ``mounts``：本地目录挂载 / 卸载（9p filesystem + guest 内 mount）
 - ``cloudinit_wait``：等待 cloud-init、状态查询与日志跟随
 - ``listing``：list / templates
@@ -38,6 +39,7 @@ from .lifecycle import (
 from .listing import list_instances, list_templates
 from .mounts import mount_instance, unmount_instance
 from .progress import progress_printer
+from .sync import sync_paths
 from .transfer import copy_file, parse_remote
 
 __all__ = [
@@ -66,6 +68,7 @@ __all__ = [
     "start_instance",
     "status_instance",
     "stop_instance",
+    "sync_paths",
     "unmount_instance",
     "wait_cloud_init",
 ]

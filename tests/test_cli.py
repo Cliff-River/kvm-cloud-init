@@ -254,6 +254,24 @@ def test_cp_dispatch(monkeypatch) -> None:
     assert calls == {"source": "vm1:/var/log/a.log", "target": "./a.log"}
 
 
+def test_sync_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "sync_paths",
+        lambda store, conn, source, target: calls.update(
+            source=source, target=target
+        )
+        or 0,
+    )
+    assert cli.main(["sync", "./site", "vm1:/srv/site"]) == 0
+    assert calls == {"source": "./site", "target": "vm1:/srv/site"}
+
+    assert cli.main(["sync", "vm1:/srv/site", "./site"]) == 0
+    assert calls == {"source": "vm1:/srv/site", "target": "./site"}
+
+
 def test_mount_unmount_dispatch(monkeypatch) -> None:
     calls = {}
     monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
