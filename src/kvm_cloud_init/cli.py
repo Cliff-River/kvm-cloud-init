@@ -11,8 +11,17 @@ from . import provision
 from .config import ConfigStore, project_root
 from .errors import KciError
 from .hv.client import connect
+from .portforward import parse_port_forwards
 
 _NAME_HELP = "instance name (the libvirt domain name)"
+
+
+def _port_forwards_type(value: str) -> list[tuple[int, int]]:
+    """argparse 类型回调：把端口转发文本解析为映射，格式错误报 usage error。"""
+    try:
+        return parse_port_forwards(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -144,6 +153,46 @@ def _build_parser() -> argparse.ArgumentParser:
 
     shell = sub.add_parser("shell", help="open an interactive SSH session")
     shell.add_argument("name", help=_NAME_HELP)
+    shell.add_argument(
+        "--port-forward",
+        dest="port_forwards",
+        default=None,
+        type=_port_forwards_type,
+        metavar="LPORT:RPORT[,LPORT:RPORT...]",
+        help="forward instance ports to local ports for the lifetime of the "
+        "shell, e.g. --port-forward 8080:80,443:443 (like 'ssh -L')",
+    )
+
+    cp_cmd = sub.add_parser(
+        "cp",
+        help="copy a regular file between the host and an instance over SFTP",
+    )
+    cp_cmd.add_argument(
+        "source",
+        help="local path or instance path in the form '<instance>:<path>'",
+    )
+    cp_cmd.add_argument(
+        "target",
+        help="local path or instance path in the form '<instance>:<path>'; "
+        "exactly one of source/target must be an instance path",
+    )
+
+    mount_cmd = sub.add_parser(
+        "mount", help="mount a local directory into a running instance (9p)"
+    )
+    mount_cmd.add_argument("name", help=_NAME_HELP)
+    mount_cmd.add_argument("local_dir", help="existing directory on the host")
+    mount_cmd.add_argument(
+        "guest_dir", help="absolute mount point path inside the instance"
+    )
+
+    unmount_cmd = sub.add_parser(
+        "unmount", help="unmount a host directory from an instance"
+    )
+    unmount_cmd.add_argument("name", help=_NAME_HELP)
+    unmount_cmd.add_argument(
+        "guest_dir", help="absolute mount point path inside the instance"
+    )
 
     exec_cmd = sub.add_parser("exec", help="run one command inside an instance")
     exec_cmd.add_argument("name", help=_NAME_HELP)
@@ -276,7 +325,19 @@ def main(argv: list[str] | None = None) -> int:
             rows = provision.list_instances(store, conn)
             _print_table(("Name", "Template", "State"), rows)
         elif args.command == "shell":
-            return provision.shell_instance(store, conn, args.name)
+            return provision.shell_instance(
+                store, conn, args.name, port_forwards=args.port_forwards
+            )
+        elif args.command == "cp":
+            return provision.copy_file(store, conn, args.source, args.target)
+        elif args.command == "mount":
+            return provision.mount_instance(
+                store, conn, args.name, args.local_dir, args.guest_dir
+            )
+        elif args.command == "unmount":
+            return provision.unmount_instance(
+                store, conn, args.name, args.guest_dir
+            )
         elif args.command == "exec":
             command = list(args.remote_command)
             if command and command[0] == "--":

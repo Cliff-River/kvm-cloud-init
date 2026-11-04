@@ -45,6 +45,10 @@ class SshError(KciError):
     """SSH 密钥缺失 / 连接失败等与远程登录相关的错误。"""
 
 
+class MountError(ProvisionError):
+    """本地目录挂载 / 卸载失败（路径非法、设备热插拔或 guest 内 mount 失败）。"""
+
+
 class ProtectionDenied(ProvisionError):
     """删除保护级别阻止了销毁 / 重建（protected，或 production 未确认）。"""
 

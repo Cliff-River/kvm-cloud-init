@@ -25,7 +25,8 @@
 ├── src/kvm_cloud_init/
 │   ├── __init__.py             # __version__ + main() 入口
 │   ├── cli.py                  # argparse: create/destroy/start/stop/reboot/status/
-│   │                           #   list/templates/shell/exec/cloud-init/images
+│   │                           #   list/templates/shell(+--port-forward)/exec/
+│   │                           #   cp/mount/unmount/cloud-init/images
 │   ├── config.py               # 配置加载、校验、三级合并、镜像目录合并
 │   ├── catalog.py              # 内置镜像预设 + 确定性渲染 images.conf
 │   ├── imagefetch.py           # 目录页解析、校验和、流式下载、压缩包解压、.state.json
@@ -33,7 +34,9 @@
 │   ├── cloudinit.py            # cloud-init 文档渲染 + 运行时公钥/用户注入
 │   ├── seediso.py              # pycdlib 生成 cidata.iso（临时目录）
 │   ├── qcow2.py                # qcow2 头 / parse_size / backing chain
+│   ├── portforward.py          # paramiko direct-tcpip 本地端口转发（ssh -L 简化版）
 │   ├── ssh.py                  # 密钥生成/复用/删除、paramiko 连接、shell/exec、
+│   │                           #   SFTP 上传/下载（cp）、端口转发挂接、
 │   │                           #   capture_command / stream_command
 │   ├── provision/              # 业务编排包（对外由 __init__.py 导出）
 │   │   ├── __init__.py         # 统一导出公共 API
@@ -41,6 +44,8 @@
 │   │   ├── create.py           # 创建/重建 + 默认等待 cloud-init
 │   │   ├── lifecycle.py        # start/stop/reboot/status/destroy
 │   │   ├── access.py           # SSH 目标解析与 shell/exec 编排
+│   │   ├── transfer.py         # cp：SFTP 上/下行与 <实例>:<路径> 方向解析
+│   │   ├── mounts.py           # mount/unmount：9p 热插拔 + guest 内挂载编排
 │   │   ├── listing.py          # list / templates
 │   │   ├── images.py           # images init/refresh/list/check/pull + ensure_image
 │   │   ├── progress.py         # 终端进度输出（rich 进度条 + 缩放自愈）
@@ -49,6 +54,7 @@
 │   └── hv/                     # libvirt 交互子包（勿命名为 libvirt）
 │       ├── client.py           # qemu:///system 连接、存储池、状态名
 │       ├── firmware.py         # UEFI 检测 + 普通 OVMF CODE/VARS 解析（域能力/描述符/文件系统）
+│       ├── filesystem.py       # 9p filesystem 设备 XML、attach/detach、kci mounts 元数据
 │       ├── storage.py          # 卷 XML / stream 上传 / 扩容 / 删除
 │       ├── domains.py          # 共享关机（shutdown_and_wait/stop_domain）、快照、
 │       │                       #   残留收集、undefine
@@ -99,6 +105,25 @@
   都先复用 `lifecycle.start_instance` 自动启动，再等待 IP 就绪。本地
   stdin/stdout 均为 TTY 时 `exec` 申请 PTY 并双向转发（`exec <实例> -- bash`
   可用），重定向/管道场景不分配 PTY。
+- `shell --port-forward LPORT:RPORT,...`：进入交互 shell 前在
+  `portforward.py` 绑定本地 127.0.0.1 监听（ThreadingTCPServer），每个本地
+  连接经同一 Transport `open_channel("direct-tcpip", ("127.0.0.1", RPORT),
+  peer)` 打开 channel，select 双向搬运；shell 退出 finally 中统一 shutdown。
+- cp：`provision/transfer.py` 解析 `<实例>:<路径>`（两端恰好一个远程），
+  复用 access 的自动启动与 SSH 等待，经 `ssh.py` 的 paramiko SFTP put/get
+  传输；普通文件直接拷贝，目录递归拷贝并按符号链接重建（`upload_path`/
+  `download_path`，lstat 判定类型、远端父目录自动 mkdir -p）；目标端是已
+  存在目录时追加源 basename；不调 scp/sftp。错误经 `_sftp_reason`/
+  `_local_reason` 分类（路径不存在、权限拒绝、本地父目录缺失、裸
+  `Failure` 等），不得把 paramiko 的 `Failure` 直接展示给用户。
+- mount/unmount：`provision/mounts.py` 先校验本地目录存在与 guest 绝对路径，
+  `hv/filesystem.py` 在持久域 XML 的 `<kci:mounts>` 元数据中登记
+  `<mount tag/source/target>` 并插入 9p `<filesystem type='mount'
+  accessmode='passthrough'>`（tag 为 `kci_<sha1[:12]>`，非挂载路径），
+  运行态再 attach/detach 设备；guest 内经 SSH 执行 `mkdir -p` 与
+  `mount -t 9p -o trans=virtio,version=9p2000.L,msize=262144 <tag> <path>`，
+  root 直连执行、非 root 一律 `sudo -n`；挂载失败回滚设备，umount 失败
+  （如 target busy）不 detach；实例关机时 unmount 只清持久配置。
 - 连接统一为 `qemu:///system`；用户需在 libvirt/kvm 组。
 - 所有面向用户的输出（help、print、警告、错误、表头、状态名）均为英文。
 
@@ -120,8 +145,11 @@ uv run kvmci status <实例名>
 uv run kvmci start|stop|reboot <实例名>
 uv run kvmci cloud-init status <实例名>
 uv run kvmci cloud-init log <实例名> [-f]
-uv run kvmci shell <实例名>
+uv run kvmci shell <实例名> [--port-forward 8080:80,443:443]
 uv run kvmci exec <实例名> -- <命令>
+uv run kvmci cp <本地|实例:路径> <实例:路径|本地>
+uv run kvmci mount <实例名> <本地目录> <虚拟机目录>
+uv run kvmci unmount <实例名> <虚拟机目录>
 ```
 
 改动后至少保证 `uv run pytest` 全绿；改了配置字段或 CLI 行为要同步

@@ -183,9 +183,9 @@ def test_shutdown_paused_does_not_send_signal(monkeypatch) -> None:
 
 
 def test_shutdown_reports_progress_every_five_seconds(monkeypatch) -> None:
-    # 每轮两次 monotonic：while 条件 + elapsed 计算。
-    # deadline=110；轮询 105（elapsed=5，播报）-> 条件 110（退出循环）
-    _patch_clock(monkeypatch, [100.0, 105.0, 105.0, 110.0])
+    # 每轮一次 monotonic（循环开头）：deadline=110；
+    # 轮询 105（elapsed=5，播报）-> 110（退出循环）
+    _patch_clock(monkeypatch, [100.0, 105.0, 110.0])
     dom = _FakeShutdownDomain([libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_RUNNING])
     logs: list[str] = []
     domains.shutdown_and_wait(dom, timeout=10, force=True, log=logs.append)
@@ -211,7 +211,7 @@ class _FakeTty:
 
 
 def test_shutdown_progress_inline_on_tty(monkeypatch) -> None:
-    _patch_clock(monkeypatch, [100.0, 105.0, 105.0, 110.0])
+    _patch_clock(monkeypatch, [100.0, 105.0, 110.0])
     tty = _FakeTty()
     monkeypatch.setattr(domains.sys, "stdout", tty)
     dom = _FakeShutdownDomain([libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_RUNNING])
@@ -225,7 +225,7 @@ def test_shutdown_progress_inline_on_tty(monkeypatch) -> None:
 
 
 def test_shutdown_timeout_without_force_raises(monkeypatch) -> None:
-    _patch_clock(monkeypatch, [100.0, 105.0, 105.0, 110.0])
+    _patch_clock(monkeypatch, [100.0, 105.0, 110.0])
     dom = _FakeShutdownDomain([libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_RUNNING])
     with pytest.raises(ShutdownTimeout, match="did not shut down within 10s"):
         domains.shutdown_and_wait(dom, timeout=10, force=False, log=lambda _line: None)

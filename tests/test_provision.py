@@ -339,9 +339,13 @@ def test_shell_instance_passes_target(level_store, monkeypatch, tmp_path) -> Non
     key = _prepare_ssh_target(monkeypatch, tmp_path)
     captured = {}
 
-    def fake_shell(instance, host, user, key_path, *, deadline=None, on_retry=None) -> int:
+    def fake_shell(
+        instance, host, user, key_path, *,
+        deadline=None, on_retry=None, port_forwards=None,
+    ) -> int:
         captured.update(
-            instance=instance, host=host, user=user, key=key_path, deadline=deadline
+            instance=instance, host=host, user=user, key=key_path,
+            deadline=deadline, port_forwards=port_forwards,
         )
         return 0
 
@@ -353,6 +357,26 @@ def test_shell_instance_passes_target(level_store, monkeypatch, tmp_path) -> Non
     assert captured["key"] == key
     # IP 等待与 sshd 连接重试共用同一个截止时间，不是两段独立的超时
     assert captured["deadline"] is not None
+    assert captured["port_forwards"] is None
+
+
+def test_shell_instance_passes_port_forwards(level_store, monkeypatch, tmp_path) -> None:
+    _prepare_ssh_target(monkeypatch, tmp_path)
+    captured = {}
+
+    def fake_shell(instance, host, user, key_path, **kwargs) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(ssh, "interactive_shell", fake_shell)
+    forwards = [(8080, 80), (443, 443)]
+    assert (
+        provision.shell_instance(
+            level_store, object(), "plain", port_forwards=forwards
+        )
+        == 0
+    )
+    assert captured["port_forwards"] == forwards
 
 
 def test_exec_instance_joins_command(level_store, monkeypatch, tmp_path) -> None:

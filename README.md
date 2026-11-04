@@ -105,8 +105,22 @@ uv run kvmci destroy rocky-llm
 | `images list` | Offline table: `Image ID`, `Origin` (`system` / `user` / `user(override)`), `Local` (`present` / `missing`), `Kind`, `Catalog ver.`, `Local ver.`. |
 | `images check [ID ...] [--all] [--include-archived]` | Probe upstream only. Default targets images referenced by templates; `--all` checks the whole catalog. Prints `up to date` / `update available` / `missing` / `unreachable`; exits 1 if anything is missing or outdated. |
 | `images pull [ID ...] [--all] [--force]` | Download or update images. `ID` accepts image IDs (`almalinux-9`, `debian-12`) or template names. `--all` is exactly the deduplicated set of images referenced by `templates.conf`. `--force` re-downloads. No IDs and no `--all` exits 2. |
-| `shell <name>` | Open an interactive SSH session. Starts the instance first if it is shut off, then waits for an IPv4 address and for sshd to accept the key. Uses the instance's private key and the **actual** IPv4 address discovered from libvirt (DHCP lease → qemu-guest-agent → ARP), never the address declared in `network-config`. IP resolution and SSH handshake retries share one 300-second window (retry every 2 seconds); the first retry prints `Waiting for SSH on <ip> ...`. |
+| `shell <name> [--port-forward LPORT:RPORT[,LPORT:RPORT...]]` | Open an interactive SSH session. Starts the instance first if it is shut off, then waits for an IPv4 address and for sshd to accept the key. Uses the instance's private key and the **actual** IPv4 address discovered from libvirt (DHCP lease → qemu-guest-agent → ARP), never the address declared in `network-config`. IP resolution and SSH handshake retries share one 300-second window (retry every 2 seconds); the first retry prints `Waiting for SSH on <ip> ...`. `--port-forward 8080:80,443:443` forwards instance ports to `127.0.0.1` on the host for the lifetime of the shell (equivalent to `ssh -L`, multiplexed over the same paramiko connection). |
 | `exec <name> -- <command>` | Run one command over SSH; starts the instance first if it is shut off. Everything after `--` is joined and passed to the remote shell; stdout/stderr are streamed and the remote exit status becomes the `kvmci` exit code. When local stdin and stdout are both terminals (e.g. `exec <name> -- bash`) a PTY is allocated and forwarded bidirectionally; redirects and pipes keep the non-PTY streaming path. Connection retries behave exactly like `shell`. |
+| `cp <source> <target>` | Copy a file, or recursively copy a directory (symlinks preserved), between the host and an instance over SFTP (no `scp`/`sftp` subprocess). Instance paths use the `<name>:<path>` form, e.g. `kvmci cp ./app.conf vm1:/etc/app.conf`, `kvmci cp ./kube vm1:/srv/kube` or `kvmci cp vm1:kube ~/` (directories are always recursive); exactly one side must be remote (instance-to-instance is not supported). If the destination side is an existing directory, the source basename is appended, like `scp`. Starts the instance first if it is shut off. Errors report the concrete cause (remote/local path not found, permission denied, missing local parent directory, SFTP failure, connection failure). |
+| `mount <name> <local_dir> <guest_dir>` | Share a host directory into a running instance via a libvirt 9p filesystem device and mount it at the absolute `guest_dir` (`mount -t 9p -o trans=virtio,...`). The device is persisted in the domain XML and recorded in kci metadata; a failed guest mount is rolled back. The guest kernel must support 9p (`CONFIG_9P_FS`, `CONFIG_NET_9P_VIRTIO`); non-root SSH users need passwordless sudo (`sudo -n`). |
+| `unmount <name> <guest_dir>` | Unmount the share inside the guest and detach the 9p device from the live and persistent domain configuration. A busy mount point aborts before detaching; host files are never deleted. |
+
+### File transfer, port forwarding and shared directories
+
+`cp` streams files over the same paramiko-managed SSH connection used by
+`shell`/`exec` (SFTP subsystem) — files are copied individually and
+directories recursively (symbolic links recreated as links). `--port-forward`
+binds each local port on `127.0.0.1` only and closes every listener when the
+shell exits. Shared directories use the 9p `passthrough` access mode; because
+QEMU runs under `qemu:///system`, the host directory must be
+readable/writable by the user QEMU runs as (adjust local ACLs/permissions
+accordingly).
 
 ### Waiting for cloud-init
 
@@ -435,8 +449,19 @@ uv run kvmci destroy rocky-llm
 | `images list` | 离线表格：`Image ID`、`Origin`（`system` / `user` / `user(override)`）、`Local`（`present` / `missing`）、`Kind`、`Catalog ver.`、`Local ver.` |
 | `images check [ID ...] [--all] [--include-archived]` | 仅探测上游。默认检查模板引用的镜像，`--all` 检查整个目录；输出 `up to date` / `update available` / `missing` / `unreachable`，存在缺失或过期时退出 1 |
 | `images pull [ID ...] [--all] [--force]` | 下载或更新镜像。`ID` 支持镜像 ID（`almalinux-9`、`debian-12`）或模板名；`--all` 恰为 `templates.conf` 引用镜像的去重集合；`--force` 重新下载；既无 ID 也无 `--all` 时退出 2 |
-| `shell <名称>` | 打开 SSH 交互式登录会话；实例已关机时先自动启动，等待 IPv4 就绪并等待 sshd 接受密钥。使用实例私钥与 libvirt 实测 IPv4 地址（DHCP 租约 → qemu-guest-agent → ARP 依次回退），绝不信任 `network-config` 中声明的地址。IP 等待与 SSH 握手重试共用同一个 300 秒等待窗口（每 2 秒重试），首次重试打印 `Waiting for SSH on <ip> ...` |
+| `shell <名称> [--port-forward 本地端口:虚拟机端口,...]` | 打开 SSH 交互式登录会话；实例已关机时先自动启动，等待 IPv4 就绪并等待 sshd 接受密钥。使用实例私钥与 libvirt 实测 IPv4 地址（DHCP 租约 → qemu-guest-agent → ARP 依次回退），绝不信任 `network-config` 中声明的地址。IP 等待与 SSH 握手重试共用同一个 300 秒等待窗口（每 2 秒重试），首次重试打印 `Waiting for SSH on <ip> ...`。`--port-forward 8080:80,443:443` 在 shell 存活期间把实例端口转发到宿主机 `127.0.0.1`（等价 `ssh -L`，复用同一条 paramiko 连接） |
 | `exec <名称> -- <命令>` | 执行一条命令；实例已关机时先自动启动并等待 IPv4 与 SSH 就绪。`--` 之后的所有参数拼接后交给远端 shell，实时透传 stdout/stderr，远端退出码即 `kvmci` 退出码。本地 stdin 与 stdout 均为终端时（如 `exec <名称> -- bash`）申请 PTY 并双向转发，交互式程序可正常使用；重定向或管道仍走无 PTY 的流式路径。连接重试行为与 `shell` 一致 |
+| `cp <源> <目标>` | 经 SFTP 在宿主机与实例之间拷贝文件，目录递归拷贝并保留符号链接（不调用 `scp`/`sftp` 子进程）。实例路径写作 `<名称>:<路径>`，如 `kvmci cp ./app.conf vm1:/etc/app.conf`、`kvmci cp ./kube vm1:/srv/kube`、`kvmci cp vm1:kube ~/`；两端必须恰好一个是实例路径（不支持实例间对拷）。目标端是已存在目录时与 `scp` 一样自动追加源文件名。实例已关机时先自动启动。错误会给出具体原因（远端/本地路径不存在、权限拒绝、本地父目录缺失、SFTP 拒绝操作、连接失败） |
+| `mount <名称> <本地目录> <虚拟机目录>` | 通过 libvirt 9p filesystem 设备把宿主机目录共享给运行中的实例，并挂载到 guest 内绝对路径（`mount -t 9p -o trans=virtio,...`）。设备持久化到域 XML 并登记到 kci 元数据；guest 内挂载失败会自动回滚。要求 guest 内核支持 9p（`CONFIG_9P_FS`、`CONFIG_NET_9P_VIRTIO`）；非 root 的 SSH 用户需要免密 sudo（`sudo -n`） |
+| `unmount <名称> <虚拟机目录>` | 在 guest 内卸载共享，并从运行态与持久域配置中 detach 9p 设备；挂载点忙时拒绝卸载且不会 detach，宿主机文件不会被删除 |
+
+### 文件拷贝、端口转发与共享目录
+
+`cp` 复用 `shell`/`exec` 的 paramiko SSH 连接（SFTP 子系统）传输，
+文件逐个传输、目录递归拷贝，符号链接按链接重建。`--port-forward` 只监听宿主机
+`127.0.0.1`，shell 退出后统一关闭监听。共享目录使用 9p `passthrough`
+模式；由于 QEMU 以 `qemu:///system` 运行，本地目录需要对 QEMU 运行用户
+可读可写（请自行调整目录权限/ACL）。
 
 ### 等待 cloud-init
 

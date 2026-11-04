@@ -9,7 +9,7 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 
 - `cli.py`：只做 argparse 参数解析、表格输出与异常到退出码的转换，不写业务逻辑。
   子命令：create/destroy/start/stop/reboot/status/list/templates/shell/exec/
-  cloud-init/images。
+  cp/mount/unmount/cloud-init/images。
 - `config.py`：五份 YAML 配置（default/images/images.user/templates/instances）
   的加载、校验、三级合并（实例 > 模板 > 默认值），以及镜像目录三层合并
   （内置预设 > images.conf > images.user.conf）。
@@ -26,14 +26,21 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
 - `qcow2.py`：qcow2 头解析、容量单位、backing chain（纯标准库）。
 - `ssh.py`：每实例密钥对（`keys/<实例名>`/`.pub`）的生成/复用/删除、
   paramiko 连接、交互 shell 与一次性 exec（不调用 `ssh`/`ssh-keygen` 子进程）；
-  另有 `capture_command`（捕获输出）与 `stream_command`（流式跟随）供 cloud-init 使用。
+  另有 `capture_command`（捕获输出）与 `stream_command`（流式跟随）供 cloud-init 使用；
+  SFTP 上传/下载（`cp`，不调用 `scp`/`sftp` 子进程；文件直传、目录递归、
+  保留符号链接，SFTP/本地错误必须翻译成具体英文原因）与端口转发挂接。
+- `portforward.py`：`ssh -L` 简化版——`127.0.0.1` 本地监听 + 同一 paramiko
+  Transport 的 `direct-tcpip` channel，纯标准库 socketserver/select 搬运。
 - `hv/`：所有 libvirt 交互。`client`（连接/存储池/状态名）、`firmware`（UEFI 检测）、
   `storage`（卷上传/扩容/删除）、`domains`（共享关机 `shutdown_and_wait`/`stop_domain`、
   快照/undefine）、`network`（实测 IPv4：`virDomainInterfaceAddresses` lease→agent→arp）、
   `osinfo`（os-variant 到 libosinfo OS ID 的解析：本机 osinfo-db > 官方 GitLab 仓库 > 内置兜底）、
-  `guest`（domain XML 生成与启动，含 `ssh-user` 元数据读写）。
+  `guest`（domain XML 生成与启动，含 `ssh-user` 元数据读写）、
+  `filesystem`（9p filesystem 设备 XML、运行态 attach/detach、`<kci:mounts>` 元数据）。
 - `provision/`：业务编排包，按职责拆分：`guard`（保护级别）、`create`（创建 + 等待）、
   `lifecycle`（start/stop/reboot/status/destroy）、`access`（shell/exec）、
+  `transfer`（cp：SFTP 上下行与 `<实例>:<路径>` 方向解析）、
+  `mounts`（mount/unmount：9p 热插拔 + guest 内 mount/umount，sudo -n 提权）、
   `listing`（list/templates）、`images`（images init/refresh/list/check/pull
   与 create 的 ensure_image）、`progress`（终端进度输出：rich 进度条与缩放自愈）、
   `cloudinit_wait`（等待/status/log）；公共 API 由 `__init__.py` 导出。
@@ -109,8 +116,11 @@ uv run kvmci start|stop|reboot <实例名> [--force]
 uv run kvmci status <实例名>
 uv run kvmci cloud-init status <实例名>
 uv run kvmci cloud-init log <实例名> [-f]
-uv run kvmci shell <实例名>
+uv run kvmci shell <实例名> [--port-forward 8080:80,443:443]
 uv run kvmci exec <实例名> -- <命令>
+uv run kvmci cp <本地|实例:路径> <实例:路径|本地>
+uv run kvmci mount <实例名> <本地目录> <虚拟机目录>
+uv run kvmci unmount <实例名> <虚拟机目录>
 uv run kvmci destroy <实例名> [--force] [--yes]
 ```
 

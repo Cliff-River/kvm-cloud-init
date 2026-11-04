@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import libvirt
@@ -101,8 +101,17 @@ def _wait_note(host: str) -> Callable[[int, float], None]:
     return on_retry
 
 
-def shell_instance(store: ConfigStore, conn: libvirt.virConnect, name: str) -> int:
-    """打开实例的 SSH 交互式登录会话，已关机时先自动启动，返回远端退出码。"""
+def shell_instance(
+    store: ConfigStore,
+    conn: libvirt.virConnect,
+    name: str,
+    port_forwards: Sequence[tuple[int, int]] | None = None,
+) -> int:
+    """打开实例的 SSH 交互式登录会话，已关机时先自动启动，返回远端退出码。
+
+    ``port_forwards`` 为 ``(本地端口, 虚拟机端口)`` 序列时，在 shell 存活
+    期间复用同一 SSH 连接做本地端口转发。
+    """
     _ensure_running(store, conn, name)
     # IP 就绪与 sshd 就绪共用同一个等待窗口：IP 常常早于 sshd 出现。
     deadline = time.monotonic() + SSH_READY_TIMEOUT
@@ -114,6 +123,7 @@ def shell_instance(store: ConfigStore, conn: libvirt.virConnect, name: str) -> i
         key_path,
         deadline=deadline,
         on_retry=_wait_note(host),
+        port_forwards=port_forwards,
     )
 
 

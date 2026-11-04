@@ -4,13 +4,14 @@
 （libvirt-python）顶层包同名导致导入歧义。
 """
 
-from . import domains, firmware, guest, network, storage
+from . import domains, filesystem, firmware, guest, network, storage
 from .client import DOMAIN_STATE_NAMES, connect, get_pool, pool_target_path
 
 __all__ = [
     "DOMAIN_STATE_NAMES",
     "connect",
     "domains",
+    "filesystem",
     "firmware",
     "get_pool",
     "guest",

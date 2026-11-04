@@ -205,10 +205,83 @@ def test_shell_dispatch(monkeypatch) -> None:
     monkeypatch.setattr(
         cli.provision,
         "shell_instance",
-        lambda store, conn, name: calls.update(name=name) or 0,
+        lambda store, conn, name, port_forwards=None: calls.update(
+            name=name, port_forwards=port_forwards
+        )
+        or 0,
     )
     assert cli.main(["shell", "rocky-lvm"]) == 0
-    assert calls == {"name": "rocky-lvm"}
+    assert calls == {"name": "rocky-lvm", "port_forwards": None}
+
+    assert (
+        cli.main(
+            [
+                "shell",
+                "rocky-lvm",
+                "--port-forward",
+                "8080:80,443:443",
+            ]
+        )
+        == 0
+    )
+    assert calls == {
+        "name": "rocky-lvm",
+        "port_forwards": [(8080, 80), (443, 443)],
+    }
+
+
+def test_shell_bad_port_forward_is_usage_error() -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["shell", "rocky-lvm", "--port-forward", "8080"])
+    assert exc.value.code == 2
+
+
+def test_cp_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "copy_file",
+        lambda store, conn, source, target: calls.update(
+            source=source, target=target
+        )
+        or 0,
+    )
+    assert cli.main(["cp", "./a.txt", "vm1:/tmp/a.txt"]) == 0
+    assert calls == {"source": "./a.txt", "target": "vm1:/tmp/a.txt"}
+
+    assert cli.main(["cp", "vm1:/var/log/a.log", "./a.log"]) == 0
+    assert calls == {"source": "vm1:/var/log/a.log", "target": "./a.log"}
+
+
+def test_mount_unmount_dispatch(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.setattr(cli, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(
+        cli.provision,
+        "mount_instance",
+        lambda store, conn, name, local_dir, guest_dir: calls.update(
+            name=name, local_dir=local_dir, guest_dir=guest_dir
+        )
+        or 0,
+    )
+    assert cli.main(["mount", "vm1", "./share", "/mnt/share"]) == 0
+    assert calls == {
+        "name": "vm1",
+        "local_dir": "./share",
+        "guest_dir": "/mnt/share",
+    }
+
+    monkeypatch.setattr(
+        cli.provision,
+        "unmount_instance",
+        lambda store, conn, name, guest_dir: calls.update(
+            unmount=(name, guest_dir)
+        )
+        or 0,
+    )
+    assert cli.main(["unmount", "vm1", "/mnt/share"]) == 0
+    assert calls["unmount"] == ("vm1", "/mnt/share")
 
 
 def test_exec_dispatch_joins_command_after_separator(monkeypatch) -> None:

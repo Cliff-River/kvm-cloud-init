@@ -6,6 +6,8 @@
 - ``create``：幂等创建与镜像/种子上传
 - ``lifecycle``：start / stop / reboot / status / destroy
 - ``access``：SSH 目标解析与 shell / exec
+- ``transfer``：宿主机与实例之间的 SFTP 文件拷贝（cp）
+- ``mounts``：本地目录挂载 / 卸载（9p filesystem + guest 内 mount）
 - ``cloudinit_wait``：等待 cloud-init、状态查询与日志跟随
 - ``listing``：list / templates
 - ``images``：镜像目录 init / refresh / list / check / pull 与自动下载
@@ -34,12 +36,15 @@ from .lifecycle import (
     stop_instance,
 )
 from .listing import list_instances, list_templates
+from .mounts import mount_instance, unmount_instance
 from .progress import progress_printer
+from .transfer import copy_file, parse_remote
 
 __all__ = [
     "check_images",
     "cloud_init_log",
     "cloud_init_status",
+    "copy_file",
     "create_instance",
     "destroy_instance",
     "ensure_destroy_allowed",
@@ -49,6 +54,8 @@ __all__ = [
     "list_images",
     "list_instances",
     "list_templates",
+    "mount_instance",
+    "parse_remote",
     "progress_printer",
     "prompt_yes",
     "pull_images",
@@ -59,5 +66,6 @@ __all__ = [
     "start_instance",
     "status_instance",
     "stop_instance",
+    "unmount_instance",
     "wait_cloud_init",
 ]
