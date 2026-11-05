@@ -109,7 +109,12 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
     普通文件按 size + 整数秒 mtime 判重，传输后 utime 保留源 mtime，符号链接
     比对 readlink 目标，类型不匹配先删后建，仅支持普通文件/目录/符号链接；
     本地或远端路径为 `/` 一律拒绝（源或目标均拒绝），目标已存在但非目录
-    报错；全程 paramiko SFTP，禁止调用 rsync/rclone/ssh 子进程；能力在
+    报错；目标目录名与源目录名不一致时，先在目标下创建同名子目录再同步
+    （`provision/sync.py` 的 `_local_target`/`_remote_target`，名称相同才
+    直接同步；因此 `sync <源目录> ~/` 只写入 `~/<源目录名>`）；远端目标经
+    SFTP `normalize` 后为 `/`、登录家目录或家目录祖先时拒绝（防 `..` 绕过），
+    `<实例>:~/...` 与 `<实例>:`（空路径）一律报错（SFTP 不展开 `~`）；全程
+    paramiko SFTP，禁止调用 rsync/rclone/ssh 子进程；能力在
     `ssh.sync_to_remote` / `sync_from_remote`，编排在 `provision/sync.py`
     （复用 `transfer.parse_remote` 与 access 的自动启动/SSH 等待）。
 

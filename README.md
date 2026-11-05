@@ -124,7 +124,13 @@ changes transfers nothing). Regular files are compared by size and integer
 mtime, which is why transferred files keep their source mtime; only regular
 files, directories and symbolic links are supported. Because sync deletes
 data, syncing onto `/` on either side is refused, an existing non-directory
-target aborts the run, and every removed path is printed. `--port-forward`
+target aborts the run, and every removed path is printed. When the target
+directory name differs from the source directory name, sync creates a
+same-named subdirectory inside the target and mirrors into it (so
+`kvmci sync vm1:site ~/` writes `~/site` and never mirrors into the home
+directory itself). Remote paths beginning with `~` and empty remote paths
+(`vm1:`) are rejected, and remote targets are canonicalized with SFTP
+`normalize` before the root/home check so `..` cannot bypass it. `--port-forward`
 binds each local port on `127.0.0.1` only and closes every listener when the
 shell exits. Shared directories use the 9p `passthrough` access mode; because
 QEMU runs under `qemu:///system`, the host directory must be
@@ -473,7 +479,12 @@ uv run kvmci destroy rocky-llm
 缺失的条目会在目标侧删除（无变更时再跑一次不传输任何内容）。普通文件按
 size 与整数秒 mtime 判重，因此传输后保留源 mtime；仅支持普通文件、目录与
 符号链接。由于 sync 会删除数据，本地或远端目标为 `/` 时一律拒绝，目标已
-存在但不是目录时中止，并逐条打印被删除的路径。`--port-forward` 只监听宿主机
+存在但不是目录时中止，并逐条打印被删除的路径。目标目录名与源目录名不一致
+时，会先在目标下创建同名子目录再同步（例如 `kvmci sync vm1:site ~/` 实际写入
+`~/site`，绝不会直接镜像到家目录），这也是防止误清空家目录的保护。远端路径
+以 `~` 开头或为空（`vm1:`）时直接报错，远端目标会先用 SFTP `normalize`
+规范化再做根目录/家目录校验，`..` 无法绕过。
+`--port-forward` 只监听宿主机
 `127.0.0.1`，shell 退出后统一关闭监听。共享目录使用 9p `passthrough`
 模式；由于 QEMU 以 `qemu:///system` 运行，本地目录需要对 QEMU 运行用户
 可读可写（请自行调整目录权限/ACL）。

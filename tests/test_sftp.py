@@ -50,6 +50,15 @@ class FakeSFTP:
             for child in sorted(path.iterdir(), key=lambda item: item.name)
         ]
 
+    def normalize(self, remote: str) -> str:
+        """模拟服务端 realpath：解析 ``.``/``..`` 并返回 root 内的绝对路径。"""
+        resolved = self._p(remote).resolve()
+        try:
+            rel = resolved.relative_to(self.root.resolve())
+        except ValueError:
+            return str(resolved)
+        return "/" if str(rel) == "." else "/" + rel.as_posix()
+
     def mkdir(self, remote: str) -> None:
         self._p(remote).mkdir()
 

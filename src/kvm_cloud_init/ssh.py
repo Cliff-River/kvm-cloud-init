@@ -757,9 +757,37 @@ def _guard_remote_sync_target(remote_path: str) -> None:
 
 
 def _guard_local_sync_target(local_path: Path) -> None:
-    """同步会删除目标中的多余内容，本地根目录一律拒绝。"""
-    if local_path == Path("/"):
+    """同步会删除目标中的多余内容，本地根目录（含 ``..`` 变体）一律拒绝。"""
+    if local_path.expanduser().resolve() == Path("/"):
         raise SshError("Refusing to sync to local path '/'")
+
+
+def _resolved_remote_path(
+    sftp: paramiko.SFTPClient, remote_path: str
+) -> str | None:
+    """返回 SFTP 规范化后的绝对路径；服务端不支持时返回 None。"""
+    try:
+        return sftp.normalize(remote_path)
+    except (OSError, AttributeError):
+        return None
+
+
+def _guard_remote_sync_target_resolved(
+    sftp: paramiko.SFTPClient, instance: str, remote_path: str
+) -> None:
+    """用规范化结果拦截 ``..`` 绕过的根目录/家目录目标。"""
+    target = _resolved_remote_path(sftp, remote_path)
+    if target is None:
+        return
+    if target == "/":
+        raise SshError("Refusing to sync to remote path '/'")
+    home = _resolved_remote_path(sftp, ".")
+    if home is None:
+        return
+    if target == home or home.startswith(target.rstrip("/") + "/"):
+        raise SshError(
+            f"Refusing to sync to the remote home directory ({instance}:{home})"
+        )
 
 
 def _remote_list(
@@ -1016,6 +1044,7 @@ def sync_to_remote(
     try:
         sftp = client.open_sftp()
         try:
+            _guard_remote_sync_target_resolved(sftp, instance, remote_path)
             try:
                 top = sftp.stat(remote_path)
                 if not stat.S_ISDIR(top.st_mode or 0):
@@ -1056,6 +1085,8 @@ def sync_from_remote(
     try:
         sftp = client.open_sftp()
         try:
+            if _resolved_remote_path(sftp, remote_path) == "/":
+                raise SshError("Refusing to sync from remote path '/'")
             kind = _remote_kind(sftp, instance, remote_path)
             if not stat.S_ISDIR(kind):
                 raise SshError(

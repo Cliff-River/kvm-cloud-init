@@ -336,6 +336,18 @@ def test_sync_download_rejects_root_source(roots) -> None:
         )
 
 
+def test_sync_upload_rejects_target_resolving_to_root(roots) -> None:
+    """带 ``..`` 的远端目标规范化后是根目录时同样拒绝。"""
+    local, _remote = roots
+    src = local / "site"
+    src.mkdir()
+    with pytest.raises(SshError, match="remote path '/'"):
+        ssh.sync_to_remote(
+            "vm1", "10.0.0.5", "cliff", Path("/k/vm1"),
+            src, "/tmp/..",
+        )
+
+
 def test_sync_download_missing_remote_source_raises(roots) -> None:
     local, _remote = roots
     with pytest.raises(SshError, match="Remote path not found"):
@@ -439,6 +451,115 @@ def test_sync_paths_download_dispatch(ready, tmp_path: Path, monkeypatch) -> Non
     assert calls[0][0] == "vm1"
     assert calls[0][4] == "/srv/site"
     assert calls[0][5] == dst
+
+
+def test_sync_paths_upload_appends_source_name_when_target_name_differs(
+    ready, tmp_path: Path, monkeypatch
+) -> None:
+    """目标目录名与源目录名不同时，实际同步到目标下的同名子目录。"""
+    src = tmp_path / "site"
+    src.mkdir()
+    calls = []
+    monkeypatch.setattr(
+        syncmod.ssh,
+        "sync_to_remote",
+        lambda *a, **k: calls.append(a) or ssh.SyncStats(),
+    )
+
+    assert syncmod.sync_paths(object(), object(), str(src), "vm1:/srv") == 0
+    assert calls[0][5] == "/srv/site"
+
+
+def test_sync_paths_upload_dot_source_uses_cwd_name(
+    ready, tmp_path: Path, monkeypatch
+) -> None:
+    """源为 ``.`` 时按解析后的当前目录名创建目标同名子目录。"""
+    src = tmp_path / "site"
+    src.mkdir()
+    monkeypatch.chdir(src)
+    calls = []
+    monkeypatch.setattr(
+        syncmod.ssh,
+        "sync_to_remote",
+        lambda *a, **k: calls.append(a) or ssh.SyncStats(),
+    )
+
+    assert syncmod.sync_paths(object(), object(), ".", "vm1:/tmp") == 0
+    assert calls[0][5] == "/tmp/site"
+
+
+def test_sync_paths_download_appends_source_name_when_target_name_differs(
+    ready, tmp_path: Path, monkeypatch
+) -> None:
+    """``sync <实例>:<dir> ~/`` 只会写入 ``~/<dir>``，不会镜像清空家目录。"""
+    target = tmp_path / "home"
+    target.mkdir()
+    calls = []
+    monkeypatch.setattr(
+        syncmod.ssh,
+        "sync_from_remote",
+        lambda *a, **k: calls.append(a) or ssh.SyncStats(),
+    )
+
+    assert syncmod.sync_paths(object(), object(), "vm1:/srv/site", str(target)) == 0
+    assert calls[0][5] == target / "site"
+
+
+def test_sync_paths_rejects_remote_root_target(tmp_path: Path) -> None:
+    with pytest.raises(ProvisionError, match="remote path '/'"):
+        syncmod.sync_paths(object(), object(), str(tmp_path), "vm1:/")
+
+
+def test_sync_paths_rejects_local_root_target() -> None:
+    with pytest.raises(ProvisionError, match="local path '/'"):
+        syncmod.sync_paths(object(), object(), "vm1:/srv/site", "/")
+
+
+def test_sync_paths_rejects_empty_remote_path() -> None:
+    with pytest.raises(ProvisionError, match="Remote path is empty"):
+        syncmod.sync_paths(object(), object(), ".", "vm1:")
+
+
+def test_sync_paths_rejects_tilde_remote_paths() -> None:
+    with pytest.raises(ProvisionError, match="Remote target paths starting with '~'"):
+        syncmod.sync_paths(object(), object(), ".", "vm1:~/site")
+    with pytest.raises(ProvisionError, match="Remote source paths starting with '~'"):
+        syncmod.sync_paths(object(), object(), "vm1:~/site", "/tmp")
+
+
+def test_sync_paths_source_with_trailing_dot_still_appends_name(
+    ready, tmp_path: Path, monkeypatch
+) -> None:
+    """``<实例>:site/.`` 仍识别出目录名 ``site``，不会被当成无名称路径。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    calls = []
+    monkeypatch.setattr(
+        syncmod.ssh,
+        "sync_from_remote",
+        lambda *a, **k: calls.append(a) or ssh.SyncStats(),
+    )
+
+    assert syncmod.sync_paths(object(), object(), "vm1:/srv/site/.", str(home)) == 0
+    assert calls[0][5] == home / "site"
+
+
+def test_sync_paths_download_expands_tilde_in_local_target(
+    ready, tmp_path: Path, monkeypatch
+) -> None:
+    """被引号包住的 ``~`` 也要展开成家目录，再追加源目录名。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    calls = []
+    monkeypatch.setattr(
+        syncmod.ssh,
+        "sync_from_remote",
+        lambda *a, **k: calls.append(a) or ssh.SyncStats(),
+    )
+
+    assert syncmod.sync_paths(object(), object(), "vm1:/srv/site", "~") == 0
+    assert calls[0][5] == home / "site"
 
 
 def test_sync_paths_unknown_instance_raises(monkeypatch, tmp_path: Path) -> None:

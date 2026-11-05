@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import time
 from pathlib import Path
 
@@ -24,6 +25,43 @@ from .transfer import RemotePath, parse_remote
 
 #: 等待实例 SSH 可达的窗口（与 shell/exec/cp 一致）
 _SSH_READY_TIMEOUT = access.SSH_READY_TIMEOUT
+
+#: 没有有意义目录名的路径（根、当前目录、家目录）
+_NAMELESS_PATHS = frozenset({"", ".", "..", "~"})
+
+
+def _source_basename(path: str) -> str:
+    """返回远端源目录名；先规范化再取最后一段（``site/.`` 也算 ``site``）。"""
+    name = posixpath.basename(posixpath.normpath(path))
+    return "" if name in _NAMELESS_PATHS else name
+
+
+def _local_source_basename(path: str) -> str:
+    """返回本地源目录名；``.``/``..``/``~`` 先解析成真实目录再取最后一段。"""
+    name = Path(path).expanduser().resolve().name
+    return "" if name in _NAMELESS_PATHS else name
+
+
+def _local_target(target: Path, source_name: str) -> Path:
+    """目标目录名与源目录名不同时，改为目标下的同名子目录。
+
+    这是防止 ``sync <源目录> ~/`` 把整个家目录镜像清空的保护：
+    目标是 ``~``（名称与源不同）时，实际同步到 ``~/<源目录名>``。
+    先 ``expanduser``，避免被引号包住的 ``~`` 被当成字面目录名。
+    """
+    target = target.expanduser()
+    if not source_name or target.name == source_name:
+        return target
+    return target / source_name
+
+
+def _remote_target(target: str, source_name: str) -> str:
+    """远端目标同理：名称不同则落到目标下的同名子目录（保留根/相对形态）。"""
+    if not source_name:
+        return target
+    if posixpath.basename(posixpath.normpath(target)) == source_name:
+        return target
+    return posixpath.join(target, source_name)
 
 
 def _connect_target(
@@ -41,12 +79,34 @@ def _connect_target(
     return host, user, key_path, deadline
 
 
+def _reject_tilde_path(remote: RemotePath | None, side: str) -> None:
+    """SFTP 不会展开 ``~``；带 ``~`` 的远端路径会被当成字面目录，直接拒绝。"""
+    if remote is not None and remote.path.startswith("~"):
+        raise ProvisionError(
+            f"Remote {side} paths starting with '~' are not supported: "
+            f"{remote.instance}:{remote.path}; use an absolute path or a path "
+            "relative to the home directory"
+        )
+
+
+def _has_empty_remote_path(spec: str) -> bool:
+    """``<实例>:`` 这种空远端路径会被 parse_remote 当成本地路径，需单独识别。"""
+    return ":" in spec and spec.split(":", 1)[1] == ""
+
+
 def sync_paths(
     store: ConfigStore, conn: libvirt.virConnect, source: str, target: str
 ) -> int:
     """把源目录镜像到目标目录，返回退出码。"""
+    if _has_empty_remote_path(source) or _has_empty_remote_path(target):
+        raise ProvisionError(
+            "Remote path is empty; use '<instance>:<path>' (use a relative "
+            "path such as '<instance>:.' for the home directory)"
+        )
     src = parse_remote(source)
     dst = parse_remote(target)
+    _reject_tilde_path(src, "source")
+    _reject_tilde_path(dst, "target")
     if src is not None and dst is not None:
         raise ProvisionError(
             "Syncing between two instances is not supported; exactly one side "
@@ -59,8 +119,19 @@ def sync_paths(
         )
 
     if src is None:
-        return _sync_up(store, conn, Path(source), dst)  # type: ignore[arg-type]
-    return _sync_down(store, conn, src, Path(target))
+        if dst.path == "/":
+            raise ProvisionError("Refusing to sync to remote path '/'")
+        remote = RemotePath(
+            dst.instance,
+            _remote_target(dst.path, _local_source_basename(source)),
+        )
+        return _sync_up(store, conn, Path(source), remote)
+
+    local_target = Path(target)
+    if local_target.expanduser().resolve() == Path("/"):
+        raise ProvisionError("Refusing to sync to local path '/'")
+    local_target = _local_target(local_target, _source_basename(src.path))
+    return _sync_down(store, conn, src, local_target)
 
 
 def _summary(stats: ssh.SyncStats) -> str:

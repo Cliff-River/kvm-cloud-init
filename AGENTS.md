@@ -127,7 +127,12 @@
   utime 保留源 mtime；符号链接比对 readlink 目标，类型不匹配（文件↔目录↔
   链接）先删后建；仅支持普通文件/目录/符号链接。本地或远端路径为 `/` 一律
   拒绝（下载方向的远端源 `/` 也拒绝；`_guard_remote/local_sync_target`），
-  目标已存在但非目录报错；成功输出 `Synced <src> -> <dst> (...)` 并逐行
+  目标已存在但非目录报错；目标目录名与源目录名不一致时，先在其中创建同名
+  子目录再镜像（`provision/sync.py` 的 `_local_target`/`_remote_target`；
+  因此 `sync <源目录> ~/` 只会写入 `~/<源目录名>`，不会清空家目录），名称
+  相同时才直接同步到目标；远端目标经 SFTP `normalize` 后为 `/`、登录家目录
+  或家目录祖先时拒绝（防 `..` 绕过），`<实例>:~/...` 和 `<实例>:`（空路径）
+  直接报错（SFTP 不展开 `~`）；成功输出 `Synced <src> -> <dst> (...)` 并逐行
   打印 `  deleted <path>`。不调 rsync/rclone/ssh 子进程。
 - mount/unmount：`provision/mounts.py` 先校验本地目录存在与 guest 绝对路径，
   `hv/filesystem.py` 在持久域 XML 的 `<kci:mounts>` 元数据中登记
