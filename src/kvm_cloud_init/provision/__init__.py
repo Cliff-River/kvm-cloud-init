@@ -6,8 +6,7 @@
 - ``create``：幂等创建与镜像/种子上传
 - ``lifecycle``：start / stop / reboot / status / destroy
 - ``access``：SSH 目标解析与 shell / exec
-- ``transfer``：宿主机与实例之间的 SFTP 文件拷贝（cp）
-- ``sync``：宿主机与实例之间的目录镜像同步（sync，rclone sync 语义）
+- ``files``：宿主机与实例之间的文件搬运（``cp`` 拷贝与 ``sync`` 目录镜像）
 - ``mounts``：本地目录挂载 / 卸载（9p filesystem + guest 内 mount）
 - ``cloudinit_wait``：等待 cloud-init、状态查询与日志跟随
 - ``listing``：list / templates
@@ -20,6 +19,7 @@ from __future__ import annotations
 from .access import exec_instance, shell_instance, ssh_target
 from .cloudinit_wait import cloud_init_log, cloud_init_status, wait_cloud_init
 from .create import create_instance
+from .files import copy_file, parse_remote, sync_paths
 from .guard import ensure_destroy_allowed, prompt_yes
 from .images import (
     check_images,
@@ -39,8 +39,6 @@ from .lifecycle import (
 from .listing import list_instances, list_templates
 from .mounts import mount_instance, unmount_instance
 from .progress import progress_printer
-from .sync import sync_paths
-from .transfer import copy_file, parse_remote
 
 __all__ = [
     "check_images",

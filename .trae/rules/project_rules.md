@@ -15,23 +15,25 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
   （内置预设 > images.conf > images.user.conf）。
 - `catalog.py`：内置主流发行版镜像预设（ID 为 `<家族>-<版本>[-变体]`），
   并确定性渲染系统 `images.conf`。
-- `imagefetch.py`：镜像获取纯能力层——目录页解析、校验和解析、暂存目录
-  （`tempfile` + `flock`）内的流式下载与原子替换、残留清扫、压缩包解压
-  （tarfile/zipfile）、`images/.state.json`；HTTP 用 `httpx`，HTML 用 `parsel`。
+- `imagefetch/`：镜像获取纯能力层包——`models`（数据模型与 Progress 协议）、
+  `http`（httpx 客户端/状态码/重试）、`index`（目录页解析）、`resolve`
+  （目标与校验和）、`archive`（压缩包解压）、`staging`（`tempfile` + `flock`
+  暂存目录与残留清扫）、`download`（流式下载）、`state`（`images/.state.json`）；
+  HTTP 用 `httpx`，HTML 用 `parsel`；公共 API 由 `__init__.py` 门面导出。
 - `imagefmt.py`：镜像格式纯能力层——按文件头探测 qcow2/raw，
   raw→qcow2 流式转换（纯标准库，不调用 `qemu-img`）。
 - `cloudinit.py`：cloud-init 三份文档的渲染（实例内联 > 模板内联 > path 目录文件）；
   另含运行时把公钥注入合并后 `user-data`（追加到首个非 root 用户，无则新增 `cliff`）。
 - `seediso.py`：临时目录 + pycdlib 生成卷标 `cidata` 的 ISO。
 - `qcow2.py`：qcow2 头解析、容量单位、backing chain（纯标准库）。
-- `ssh.py`：每实例密钥对（`keys/<实例名>`/`.pub`）的生成/复用/删除、
-  paramiko 连接、交互 shell 与一次性 exec（不调用 `ssh`/`ssh-keygen` 子进程）；
-  另有 `capture_command`（捕获输出）与 `stream_command`（流式跟随）供 cloud-init 使用；
-  SFTP 上传/下载（`cp`，不调用 `scp`/`sftp` 子进程；文件直传、目录递归、
-  保留符号链接，SFTP/本地错误必须翻译成具体英文原因）、目录镜像同步
-  （`sync`，rclone sync 语义）与端口转发挂接。
-- `portforward.py`：`ssh -L` 简化版——`127.0.0.1` 本地监听 + 同一 paramiko
-  Transport 的 `direct-tcpip` channel，纯标准库 socketserver/select 搬运。
+- `ssh/`：SSH 传输能力包。`keys`（每实例密钥对 `keys/<实例名>`/`.pub` 的
+  生成/复用/删除）、`client`（paramiko 连接与重试）、`session`（交互 shell 与
+  一次性 exec，不调用 `ssh`/`ssh-keygen` 子进程）、`command`（`capture_command`
+  / `stream_command`，供 cloud-init 使用）、`sftp`（`cp` 的 SFTP 上传/下载，
+  不调用 `scp`/`sftp` 子进程；文件直传、目录递归、保留符号链接，SFTP/本地
+  错误必须翻译成具体英文原因）、`sync`（rclone sync 语义的目录镜像）、
+  `portforward`（`ssh -L` 简化版：`127.0.0.1` 本地监听 + 同一 paramiko
+  Transport 的 `direct-tcpip` channel）。公共 API 由 `__init__.py` 门面导出。
 - `hv/`：所有 libvirt 交互。`client`（连接/存储池/状态名）、`firmware`（UEFI 检测）、
   `storage`（卷上传/扩容/删除）、`domains`（共享关机 `shutdown_and_wait`/`stop_domain`、
   快照/undefine）、`network`（实测 IPv4：`virDomainInterfaceAddresses` lease→agent→arp）、
@@ -40,8 +42,8 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
   `filesystem`（9p filesystem 设备 XML、运行态 attach/detach、`<kci:mounts>` 元数据）。
 - `provision/`：业务编排包，按职责拆分：`guard`（保护级别）、`create`（创建 + 等待）、
   `lifecycle`（start/stop/reboot/status/destroy）、`access`（shell/exec）、
-  `transfer`（cp：SFTP 上下行与 `<实例>:<路径>` 方向解析）、
-  `sync`（sync：目录镜像，rclone sync 语义，删除目标多余条目）、
+  `files`（cp 与 sync：`paths` 解析 `<实例>:<路径>` 并准备连接、`cp` SFTP
+  上下行、`sync` 目录镜像，rclone sync 语义，删除目标多余条目）、
   `mounts`（mount/unmount：9p 热插拔 + guest 内 mount/umount，sudo -n 提权）、
   `listing`（list/templates）、`images`（images init/refresh/list/check/pull
   与 create 的 ensure_image）、`progress`（终端进度输出：rich 进度条与缩放自愈）、
@@ -82,7 +84,7 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
     `image_dir`（本地目录只由 `default.conf` 的 `image_dir` 决定）。
     系统 `images.conf` 由 `catalog.py` 确定性渲染（缺失自动生成、git-ignored、
     勿手改）；用户条目只写 `images.user.conf`（永不改写，同名键整条覆盖）。
-14. 镜像获取统一走 `imagefetch.py`（HTTP 用 `httpx`、HTML 用 `parsel`；
+14. 镜像获取统一走 `imagefetch/`（HTTP 用 `httpx`、HTML 用 `parsel`；
     禁止 curl/wget/aria2 子进程）；下载、解压与转换都在
     `<image_dir>/.staging` 下由 `tempfile.TemporaryDirectory` 创建的临时目录内
     完成（必须用 `dir=` 固定到同一文件系统，禁止用默认 `/tmp`，否则
@@ -110,13 +112,14 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
     比对 readlink 目标，类型不匹配先删后建，仅支持普通文件/目录/符号链接；
     本地或远端路径为 `/` 一律拒绝（源或目标均拒绝），目标已存在但非目录
     报错；目标目录名与源目录名不一致时，先在目标下创建同名子目录再同步
-    （`provision/sync.py` 的 `_local_target`/`_remote_target`，名称相同才
+    （`provision/files/sync.py` 的 `_local_target`/`_remote_target`，名称相同才
     直接同步；因此 `sync <源目录> ~/` 只写入 `~/<源目录名>`）；远端目标经
     SFTP `normalize` 后为 `/`、登录家目录或家目录祖先时拒绝（防 `..` 绕过），
     `<实例>:~/...` 与 `<实例>:`（空路径）一律报错（SFTP 不展开 `~`）；全程
     paramiko SFTP，禁止调用 rsync/rclone/ssh 子进程；能力在
-    `ssh.sync_to_remote` / `sync_from_remote`，编排在 `provision/sync.py`
-    （复用 `transfer.parse_remote` 与 access 的自动启动/SSH 等待）。
+    `ssh/sync.py` 的 `sync_to_remote` / `sync_from_remote`，编排在
+    `provision/files/sync.py`（复用 `files.paths.parse_remote` 与 access 的
+    自动启动/SSH 等待）。
 
 ## 常用命令
 

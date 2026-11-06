@@ -18,7 +18,7 @@ from collections.abc import Sequence
 
 import paramiko
 
-from .errors import SshError
+from ..errors import SshError
 
 #: 转发搬运缓冲区与 select 超时（秒；仅用于周期性回到循环检查退出）
 _BUFSIZE = 65536

@@ -110,7 +110,7 @@ def remote_tree(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     def fake_connect(instance, host, user, key_path, *, deadline=None, on_retry=None):
         return FakeClient(FakeSFTP(root))
 
-    monkeypatch.setattr(ssh, "_connect", fake_connect)
+    monkeypatch.setattr(ssh.client, "_connect", fake_connect)
     return root, dest
 
 
@@ -265,7 +265,7 @@ def test_sftp_session_is_closed(remote_tree, tmp_path: Path, monkeypatch) -> Non
     local = tmp_path / "a.txt"
     local.write_text("x")
     client = FakeClient(FakeSFTP(root))
-    monkeypatch.setattr(ssh, "_connect", lambda *a, **k: client)
+    monkeypatch.setattr(ssh.client, "_connect", lambda *a, **k: client)
 
     ssh.upload_path(
         "vm1", "10.0.0.5", "cliff", Path("/k/vm1"), local, "/a.txt"

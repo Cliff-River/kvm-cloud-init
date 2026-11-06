@@ -9,7 +9,7 @@ import threading
 import pytest
 
 from kvm_cloud_init.errors import SshError
-from kvm_cloud_init.portforward import (
+from kvm_cloud_init.ssh.portforward import (
     PortForwarder,
     _ForwardServer,
     parse_port_forwards,

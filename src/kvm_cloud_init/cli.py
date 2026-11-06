@@ -11,7 +11,7 @@ from . import provision
 from .config import ConfigStore, project_root
 from .errors import KciError
 from .hv.client import connect
-from .portforward import parse_port_forwards
+from .ssh.portforward import parse_port_forwards
 
 _NAME_HELP = "instance name (the libvirt domain name)"
 

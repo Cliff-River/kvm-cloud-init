@@ -13,7 +13,8 @@ from test_sftp import FakeClient, FakeSFTP  # type: ignore[import-not-found]
 
 from kvm_cloud_init import ssh
 from kvm_cloud_init.errors import ProvisionError, SshError
-from kvm_cloud_init.provision import sync as syncmod
+from kvm_cloud_init.provision.files import paths
+from kvm_cloud_init.provision.files import sync as syncmod
 
 #: 固定的源文件 mtime（秒），保证“再同步一次”时 size+mtime 判定确定性
 FIXED_MTIME = 1_700_000_000
@@ -30,7 +31,7 @@ def roots(tmp_path: Path, monkeypatch):
     def fake_connect(instance, host, user, key_path, *, deadline=None, on_retry=None):
         return FakeClient(FakeSFTP(remote))
 
-    monkeypatch.setattr(ssh, "_connect", fake_connect)
+    monkeypatch.setattr(ssh.client, "_connect", fake_connect)
     return local, remote
 
 
@@ -388,10 +389,10 @@ def test_sync_download_accepts_relative_remote_path(roots) -> None:
 
 @pytest.fixture
 def ready(monkeypatch):
-    monkeypatch.setattr(syncmod.domains, "lookup_domain", lambda *_: object())
-    monkeypatch.setattr(syncmod.access, "_ensure_running", lambda *a: None)
+    monkeypatch.setattr(paths.domains, "lookup_domain", lambda *_: object())
+    monkeypatch.setattr(paths.access, "_ensure_running", lambda *a: None)
     monkeypatch.setattr(
-        syncmod.access,
+        paths.access,
         "wait_ssh_target",
         lambda *_a, **_k: ("10.0.0.5", "cliff", Path("/k/vm1")),
     )
@@ -565,6 +566,6 @@ def test_sync_paths_download_expands_tilde_in_local_target(
 def test_sync_paths_unknown_instance_raises(monkeypatch, tmp_path: Path) -> None:
     src = tmp_path / "site"
     src.mkdir()
-    monkeypatch.setattr(syncmod.domains, "lookup_domain", lambda *_: None)
+    monkeypatch.setattr(paths.domains, "lookup_domain", lambda *_: None)
     with pytest.raises(ProvisionError, match="does not exist"):
         syncmod.sync_paths(object(), object(), str(src), "ghost:/srv/site")

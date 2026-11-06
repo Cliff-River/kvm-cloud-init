@@ -29,28 +29,26 @@
 │   │                           #   cp/sync/mount/unmount/cloud-init/images
 │   ├── config.py               # 配置加载、校验、三级合并、镜像目录合并
 │   ├── catalog.py              # 内置镜像预设 + 确定性渲染 images.conf
-│   ├── imagefetch.py           # 目录页解析、校验和、流式下载、压缩包解压、.state.json
+│   ├── imagefetch/             # 镜像获取能力包：models/http/index/resolve/archive/
+│   │                           #   staging/download/state
 │   ├── imagefmt.py             # 镜像格式探测（qcow2/raw）与 raw→qcow2 流式转换
 │   ├── cloudinit.py            # cloud-init 文档渲染 + 运行时公钥/用户注入
 │   ├── seediso.py              # pycdlib 生成 cidata.iso（临时目录）
 │   ├── qcow2.py                # qcow2 头 / parse_size / backing chain
-│   ├── portforward.py          # paramiko direct-tcpip 本地端口转发（ssh -L 简化版）
-│   ├── ssh.py                  # 密钥生成/复用/删除、paramiko 连接、shell/exec、
-│   │                           #   SFTP 上传/下载（cp）、目录镜像同步（sync）、
-│   │                           #   端口转发挂接、capture_command / stream_command
+│   ├── ssh/                    # SSH 传输能力包：keys/client/session/command/sftp/
+│   │                           #   sync/portforward
 │   ├── provision/              # 业务编排包（对外由 __init__.py 导出）
 │   │   ├── __init__.py         # 统一导出公共 API
 │   │   ├── guard.py            # 删除保护级别把关、production 交互确认
 │   │   ├── create.py           # 创建/重建 + 默认等待 cloud-init
 │   │   ├── lifecycle.py        # start/stop/reboot/status/destroy
 │   │   ├── access.py           # SSH 目标解析与 shell/exec 编排
-│   │   ├── transfer.py         # cp：SFTP 上/下行与 <实例>:<路径> 方向解析
-│   │   ├── sync.py             # sync：目录镜像（rclone sync 语义，删除目标多余条目）
+│   │   ├── files/              # cp / sync：paths.py（<实例>:<路径>）+ cp.py + sync.py
 │   │   ├── mounts.py           # mount/unmount：9p 热插拔 + guest 内挂载编排
 │   │   ├── listing.py          # list / templates
 │   │   ├── images.py           # images init/refresh/list/check/pull + ensure_image
 │   │   ├── progress.py         # 终端进度输出（rich 进度条 + 缩放自愈）
-│   │   └── cloudinit_wait.py   # 等待 cloud-init、status、log [-f]
+│   │   └── cloudinit_wait/     # 等待 cloud-init、status、log [-f]
 │   ├── errors.py               # KciError 体系（英文用户信息）
 │   └── hv/                     # libvirt 交互子包（勿命名为 libvirt）
 │       ├── client.py           # qemu:///system 连接、存储池、状态名
@@ -107,18 +105,19 @@
   stdin/stdout 均为 TTY 时 `exec` 申请 PTY 并双向转发（`exec <实例> -- bash`
   可用），重定向/管道场景不分配 PTY。
 - `shell --port-forward LPORT:RPORT,...`：进入交互 shell 前在
-  `portforward.py` 绑定本地 127.0.0.1 监听（ThreadingTCPServer），每个本地
+  `ssh/portforward.py` 绑定本地 127.0.0.1 监听（ThreadingTCPServer），每个本地
   连接经同一 Transport `open_channel("direct-tcpip", ("127.0.0.1", RPORT),
   peer)` 打开 channel，select 双向搬运；shell 退出 finally 中统一 shutdown。
-- cp：`provision/transfer.py` 解析 `<实例>:<路径>`（两端恰好一个远程），
-  复用 access 的自动启动与 SSH 等待，经 `ssh.py` 的 paramiko SFTP put/get
+- cp：`provision/files/paths.py` 解析 `<实例>:<路径>`（两端恰好一个远程），
+  `provision/files/cp.py` 复用 access 的自动启动与 SSH 等待，经 `ssh/sftp.py`
+  的 paramiko SFTP put/get
   传输；普通文件直接拷贝，目录递归拷贝并按符号链接重建（`upload_path`/
   `download_path`，lstat 判定类型、远端父目录自动 mkdir -p）；目标端是已
   存在目录时追加源 basename；不调 scp/sftp。错误经 `_sftp_reason`/
   `_local_reason` 分类（路径不存在、权限拒绝、本地父目录缺失、裸
   `Failure` 等），不得把 paramiko 的 `Failure` 直接展示给用户。
-- sync：`provision/sync.py` 复用 `transfer.parse_remote` 判方向（双远程/双
-  本地均报错），复用 access 的自动启动与 SSH 等待；能力层在 `ssh.py`
+- sync：`provision/files/sync.py` 复用 `files.paths.parse_remote` 判方向（双远程/双
+  本地均报错），复用 access 的自动启动与 SSH 等待；能力层在 `ssh/sync.py`
   （`sync_to_remote`/`sync_from_remote` + `SyncStats`）。语义为 `rclone sync`
   而非 rsync：两端必须都是目录，同步的是源目录**内容**，目标中源已不存在
   的条目递归删除（文件/目录/符号链接各计 1）；远端路径可相对（相对 SFTP
@@ -128,7 +127,7 @@
   链接）先删后建；仅支持普通文件/目录/符号链接。本地或远端路径为 `/` 一律
   拒绝（下载方向的远端源 `/` 也拒绝；`_guard_remote/local_sync_target`），
   目标已存在但非目录报错；目标目录名与源目录名不一致时，先在其中创建同名
-  子目录再镜像（`provision/sync.py` 的 `_local_target`/`_remote_target`；
+  子目录再镜像（`provision/files/sync.py` 的 `_local_target`/`_remote_target`；
   因此 `sync <源目录> ~/` 只会写入 `~/<源目录名>`，不会清空家目录），名称
   相同时才直接同步到目标；远端目标经 SFTP `normalize` 后为 `/`、登录家目录
   或家目录祖先时拒绝（防 `..` 绕过），`<实例>:~/...` 和 `<实例>:`（空路径）
@@ -178,7 +177,7 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 
 - 不要重新引入 Bash 脚本或 subprocess 包装 virsh/virt-install/genisoimage/qemu-img，
   也不要用 subprocess 调用 `ssh`/`ssh-keygen`（统一走 paramiko）。
-- 镜像下载统一走 `imagefetch.py`（HTTP 用 httpx，HTML 用 parsel），
+- 镜像下载统一走 `imagefetch/`（HTTP 用 httpx，HTML 用 parsel），
   不要调用 curl/wget/aria2 子进程；压缩包解压用标准库 `tarfile`/`zipfile`，
   格式转换用 `imagefmt.py`，都不要调 `qemu-img` 子进程。
 - 不要手改 `images.conf`（系统生成、git-ignored）；用户条目写入 `images.user.conf`。
@@ -193,16 +192,16 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 - virtinst 未发布到 PyPI，创建域改为直接生成 XML + libvirt API（见 hv/guest.py）。
 - libvirt-python 12 绑定：`pool.info()`/`vol.info()` 无 flags 参数，info 为 list。
 - `hv/` 不叫 `libvirt/`，避免与第三方 libvirt 包同名。
-- paramiko 5.x 的 `Ed25519Key` 无 `generate()`：`ssh._generate_key` 用
+- paramiko 5.x 的 `Ed25519Key` 无 `generate()`：`ssh.keys._generate_key` 用
   `getattr(..., "generate", None)` 探测，缺失时回退 `RSAKey.generate(3072)`。
-- SSH 连接重试在 `ssh._connect` 内：连接/握手失败每 `CONNECT_RETRY_INTERVAL`
+- SSH 连接重试在 `ssh.client._connect` 内：连接/握手失败每 `CONNECT_RETRY_INTERVAL`
   （2s）重试到 `deadline`（`time.monotonic()` 绝对时间，缺省
   `now + CONNECT_RETRY_TIMEOUT`=60s），认证失败立即失败不重试；
   `shell`/`exec` 由 `access` 传入与 IP 等待共用的 300 秒 deadline，
   首次重试打印 `Waiting for SSH on <ip> ...`。实例刚启动时 IP 常早于 sshd
   就绪，只等 IP 会在握手阶段直接报 `Unable to connect to port 22`。
 - `virDomainInterfaceAddresses` 支持 SRC_LEASE / SRC_AGENT / SRC_ARP 三类来源。
-- `imagefetch.py` 的 HTTP 客户端可注入：测试用
+- `imagefetch/` 的 HTTP 客户端可注入：测试用
   `httpx.Client(transport=httpx.MockTransport(handler))`，不建立真实连接。
 - `imagefmt.py` 纯标准库实现格式探测与 raw→qcow2 流式转换：qcow2 头 104 字节、
   64 KiB 簇、refcount order 4；数据簇顺序追加，L1/L2 项都写 `COPIED` 标志，

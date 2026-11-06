@@ -17,10 +17,10 @@ TARGET = ("10.0.0.5", "cliff", Path("/keys/vm"))
 @pytest.fixture(autouse=True)
 def _patch_target(monkeypatch):
     monkeypatch.setattr(
-        cloudinit_wait.access, "ssh_target", lambda conn, name: TARGET
+        cloudinit_wait.wait.access, "ssh_target", lambda conn, name: TARGET
     )
-    monkeypatch.setattr(cloudinit_wait.time, "monotonic", lambda: 100.0)
-    monkeypatch.setattr(cloudinit_wait.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(cloudinit_wait.wait.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(cloudinit_wait.wait.time, "sleep", lambda _s: None)
 
 
 def _capture_key(command: str) -> str:
@@ -42,7 +42,7 @@ def _patch_capture(monkeypatch, json_status: str, tail: str = "") -> None:
             return f"Cloud-init status: {json_status}", "", 0
         return tail, "", 0
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", fake_capture)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", fake_capture)
 
 
 # ---- wait_cloud_init -----------------------------------------------------
@@ -65,10 +65,10 @@ def test_wait_prints_progress_heartbeat(monkeypatch, capsys) -> None:
             return f'{{"status": "{next(statuses)}"}}', "", 0
         return "", "", 0
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
     clocks = iter([100.0, 100.0, 115.0, 117.0, 117.0])
     monkeypatch.setattr(
-        cloudinit_wait.time, "monotonic", lambda: next(clocks)
+        cloudinit_wait.wait.time, "monotonic", lambda: next(clocks)
     )
 
     assert cloudinit_wait.wait_cloud_init(object(), "vm") == 0
@@ -84,14 +84,14 @@ class _TtyStream(io.StringIO):
 
 def test_wait_verbose_tty_clears_block_on_success(monkeypatch) -> None:
     stream = _TtyStream()
-    monkeypatch.setattr(cloudinit_wait.sys, "stdout", stream)
+    monkeypatch.setattr(cloudinit_wait.wait.sys, "stdout", stream)
 
     def capture(_instance, _host, _user, _key_path, command, *, _timeout=None):
         if command == cloudinit_wait.STATUS_JSON_CMD:
             return '{"status": "done"}', "", 0
         return "tail-line\n", "", 0
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
     assert cloudinit_wait.wait_cloud_init(
         object(), "vm", verbose=True
     ) == 0
@@ -103,7 +103,7 @@ def test_wait_verbose_tty_clears_block_on_success(monkeypatch) -> None:
 
 def test_wait_spinner_refreshes_single_line_on_tty(monkeypatch) -> None:
     stream = _TtyStream()
-    monkeypatch.setattr(cloudinit_wait.sys, "stdout", stream)
+    monkeypatch.setattr(cloudinit_wait.wait.sys, "stdout", stream)
     statuses = iter(["running", "running", "running", "done"])
 
     def capture(_instance, _host, _user, _key_path, command, *, _timeout=None):
@@ -111,12 +111,12 @@ def test_wait_spinner_refreshes_single_line_on_tty(monkeypatch) -> None:
             return f'{{"status": "{next(statuses)}"}}', "", 0
         return "", "", 0
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
 
     clock = {"now": 100.0}
-    monkeypatch.setattr(cloudinit_wait.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(cloudinit_wait.wait.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(
-        cloudinit_wait.time,
+        cloudinit_wait.wait.time,
         "sleep",
         lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
     )
@@ -133,7 +133,7 @@ def test_wait_spinner_covers_ssh_wait(monkeypatch) -> None:
     from kvm_cloud_init.errors import NetworkError
 
     stream = _TtyStream()
-    monkeypatch.setattr(cloudinit_wait.sys, "stdout", stream)
+    monkeypatch.setattr(cloudinit_wait.wait.sys, "stdout", stream)
     calls = {"count": 0}
 
     def target(_conn, _name):
@@ -142,13 +142,13 @@ def test_wait_spinner_covers_ssh_wait(monkeypatch) -> None:
             raise NetworkError("no IP yet")
         return TARGET
 
-    monkeypatch.setattr(cloudinit_wait.access, "ssh_target", target)
+    monkeypatch.setattr(cloudinit_wait.wait.access, "ssh_target", target)
     _patch_capture(monkeypatch, "done")
 
     clock = {"now": 100.0}
-    monkeypatch.setattr(cloudinit_wait.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(cloudinit_wait.wait.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(
-        cloudinit_wait.time,
+        cloudinit_wait.wait.time,
         "sleep",
         lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
     )
@@ -167,7 +167,7 @@ def test_wait_verbose_reads_both_logs(monkeypatch, capsys) -> None:
             return "out-line\n", "", 0
         return "log-line\n", "", 0
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
     assert cloudinit_wait.wait_cloud_init(
         object(), "vm", verbose=True
     ) == 0
@@ -179,11 +179,11 @@ def test_wait_verbose_reads_both_logs(monkeypatch, capsys) -> None:
 def test_verbose_renderer_truncates_long_lines(monkeypatch) -> None:
     stream = _TtyStream()
     monkeypatch.setattr(
-        cloudinit_wait.shutil,
+        cloudinit_wait.render.shutil,
         "get_terminal_size",
         lambda *_args: os.terminal_size((20, 24)),
     )
-    renderer = cloudinit_wait._VerboseRenderer(stream)
+    renderer = cloudinit_wait.render._VerboseRenderer(stream)
     renderer.update("running", ["x" * 100])
     data = stream.getvalue()
     assert "x" * 19 in data
@@ -199,8 +199,8 @@ def test_tail_lines_falls_back_to_sudo(monkeypatch) -> None:
             return "a\nb\n", "", 0
         return "", "Permission denied", 1
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
-    lines = cloudinit_wait._tail_lines(
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
+    lines = cloudinit_wait.query._tail_lines(
         "vm", TARGET, cloudinit_wait.OUTPUT_LOG, 6
     )
     assert lines == ["a", "b"]
@@ -210,12 +210,12 @@ def test_tail_lines_falls_back_to_sudo(monkeypatch) -> None:
 
 def test_tail_lines_raises_when_unreadable(monkeypatch) -> None:
     monkeypatch.setattr(
-        cloudinit_wait.ssh,
+        cloudinit_wait.query.ssh,
         "capture_command",
         lambda *_args, **_kwargs: ("", "Permission denied", 1),
     )
     with pytest.raises(CloudInitError, match="Cannot read"):
-        cloudinit_wait._tail_lines("vm", TARGET, cloudinit_wait.OUTPUT_LOG, 6)
+        cloudinit_wait.query._tail_lines("vm", TARGET, cloudinit_wait.OUTPUT_LOG, 6)
 
 
 def test_wait_verbose_reports_unreadable_log(monkeypatch, capsys) -> None:
@@ -224,7 +224,7 @@ def test_wait_verbose_reports_unreadable_log(monkeypatch, capsys) -> None:
             return '{"status": "done"}', "", 0
         return "", "Permission denied", 1
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
     assert cloudinit_wait.wait_cloud_init(
         object(), "vm", verbose=True
     ) == 0
@@ -237,7 +237,7 @@ def test_cloud_init_log_falls_back_to_sudo_cat(monkeypatch, capsys) -> None:
             return "full log\n", "", 0
         return "", "Permission denied", 1
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
     assert cloudinit_wait.cloud_init_log(object(), "vm") == 0
     assert "full log" in capsys.readouterr().out
 
@@ -252,7 +252,7 @@ def test_cloud_init_log_follow_uses_sudo_when_unreadable(monkeypatch) -> None:
             return "", "", 0
         return "", "", 1
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
     seen: dict[str, str] = {}
 
     def fake_stream(
@@ -263,8 +263,8 @@ def test_cloud_init_log_follow_uses_sudo_when_unreadable(monkeypatch) -> None:
             should_stop()
         return 0
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "stream_command", fake_stream)
-    monkeypatch.setattr(cloudinit_wait.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "stream_command", fake_stream)
+    monkeypatch.setattr(cloudinit_wait.wait.time, "monotonic", lambda: 10.0)
 
     assert cloudinit_wait.cloud_init_log(object(), "vm", follow=True) == 0
     assert seen["command"].startswith("sudo -n tail -n +1 -F ")
@@ -286,7 +286,7 @@ def test_wait_ctrl_c_leaves_instance_running(monkeypatch, capsys) -> None:
     def interrupt(_seconds):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(cloudinit_wait.time, "sleep", interrupt)
+    monkeypatch.setattr(cloudinit_wait.wait.time, "sleep", interrupt)
 
     assert cloudinit_wait.wait_cloud_init(object(), "vm") == 0
     assert (
@@ -311,17 +311,17 @@ def test_wait_ssh_timeout_raises_cloudinit_error(monkeypatch) -> None:
     def no_target(_conn, _name):
         raise NetworkError("no IP")
 
-    monkeypatch.setattr(cloudinit_wait.access, "ssh_target", no_target)
+    monkeypatch.setattr(cloudinit_wait.wait.access, "ssh_target", no_target)
 
     clock = iter([100.0, 100.0, 100.0, 401.0])
-    monkeypatch.setattr(cloudinit_wait.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(cloudinit_wait.wait.time, "monotonic", lambda: next(clock))
     with pytest.raises(CloudInitError, match="did not become reachable"):
         cloudinit_wait.wait_cloud_init(object(), "vm")
 
 
 def test_wait_bad_json_raises(monkeypatch) -> None:
     monkeypatch.setattr(
-        cloudinit_wait.ssh,
+        cloudinit_wait.query.ssh,
         "capture_command",
         lambda *args, **kwargs: ("not json", "", 0),
     )
@@ -349,7 +349,7 @@ def test_cloud_init_status_exit_codes(
 
 def test_cloud_init_log_prints_full_log(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
-        cloudinit_wait.ssh,
+        cloudinit_wait.query.ssh,
         "capture_command",
         lambda *args, **kwargs: ("full log\n", "", 0),
     )
@@ -366,7 +366,7 @@ def test_cloud_init_log_follow_finished_does_not_hang(
     _patch_capture(monkeypatch, state)
     calls: list[str] = []
     monkeypatch.setattr(
-        cloudinit_wait.ssh,
+        cloudinit_wait.query.ssh,
         "stream_command",
         lambda *args, **kwargs: calls.append("stream") or 0,
     )
@@ -385,10 +385,10 @@ def test_cloud_init_log_follow_streams_until_done(monkeypatch) -> None:
             return f'{{"status": "{next(statuses)}"}}', "", 0
         return "log\n", "", 0
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "capture_command", capture)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
     clocks = iter([10.0, 20.0, 30.0])
     monkeypatch.setattr(
-        cloudinit_wait.time, "monotonic", lambda: next(clocks)
+        cloudinit_wait.wait.time, "monotonic", lambda: next(clocks)
     )
 
     seen: dict[str, object] = {}
@@ -400,7 +400,7 @@ def test_cloud_init_log_follow_streams_until_done(monkeypatch) -> None:
         seen["stopped"] = should_stop() if should_stop is not None else None
         return 0
 
-    monkeypatch.setattr(cloudinit_wait.ssh, "stream_command", fake_stream)
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "stream_command", fake_stream)
 
     assert cloudinit_wait.cloud_init_log(object(), "vm", follow=True) == 0
     assert seen["command"] == f"tail -n +1 -F {cloudinit_wait.LOG_FILE}"

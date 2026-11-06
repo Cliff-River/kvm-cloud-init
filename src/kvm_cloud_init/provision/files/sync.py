@@ -11,20 +11,14 @@
 from __future__ import annotations
 
 import posixpath
-import time
 from pathlib import Path
 
 import libvirt
 
-from .. import ssh
-from ..config import ConfigStore
-from ..errors import ProvisionError
-from ..hv import domains
-from . import access
-from .transfer import RemotePath, parse_remote
-
-#: 等待实例 SSH 可达的窗口（与 shell/exec/cp 一致）
-_SSH_READY_TIMEOUT = access.SSH_READY_TIMEOUT
+from ... import ssh
+from ...config import ConfigStore
+from ...errors import ProvisionError
+from . import paths
 
 #: 没有有意义目录名的路径（根、当前目录、家目录）
 _NAMELESS_PATHS = frozenset({"", ".", "..", "~"})
@@ -64,22 +58,7 @@ def _remote_target(target: str, source_name: str) -> str:
     return posixpath.join(target, source_name)
 
 
-def _connect_target(
-    store: ConfigStore, conn: libvirt.virConnect, instance: str
-) -> tuple[str, str, Path, float]:
-    """校验实例存在、必要时自动启动，并等待 SSH 就绪。"""
-    dom = domains.lookup_domain(conn, instance)
-    if dom is None:
-        raise ProvisionError(f"Instance {instance} does not exist")
-    access._ensure_running(store, conn, instance)
-    deadline = time.monotonic() + _SSH_READY_TIMEOUT
-    host, user, key_path = access.wait_ssh_target(
-        conn, instance, deadline=deadline
-    )
-    return host, user, key_path, deadline
-
-
-def _reject_tilde_path(remote: RemotePath | None, side: str) -> None:
+def _reject_tilde_path(remote: paths.RemotePath | None, side: str) -> None:
     """SFTP 不会展开 ``~``；带 ``~`` 的远端路径会被当成字面目录，直接拒绝。"""
     if remote is not None and remote.path.startswith("~"):
         raise ProvisionError(
@@ -103,8 +82,8 @@ def sync_paths(
             "Remote path is empty; use '<instance>:<path>' (use a relative "
             "path such as '<instance>:.' for the home directory)"
         )
-    src = parse_remote(source)
-    dst = parse_remote(target)
+    src = paths.parse_remote(source)
+    dst = paths.parse_remote(target)
     _reject_tilde_path(src, "source")
     _reject_tilde_path(dst, "target")
     if src is not None and dst is not None:
@@ -121,7 +100,7 @@ def sync_paths(
     if src is None:
         if dst.path == "/":
             raise ProvisionError("Refusing to sync to remote path '/'")
-        remote = RemotePath(
+        remote = paths.RemotePath(
             dst.instance,
             _remote_target(dst.path, _local_source_basename(source)),
         )
@@ -151,11 +130,13 @@ def _sync_up(
     store: ConfigStore,
     conn: libvirt.virConnect,
     local: Path,
-    remote: RemotePath,
+    remote: paths.RemotePath,
 ) -> int:
     if not local.is_dir():
         raise ProvisionError(f"Local source directory not found: {local}")
-    host, user, key_path, deadline = _connect_target(store, conn, remote.instance)
+    host, user, key_path, deadline = paths._connect_target(
+        store, conn, remote.instance
+    )
     stats = ssh.sync_to_remote(
         remote.instance,
         host,
@@ -176,10 +157,12 @@ def _sync_up(
 def _sync_down(
     store: ConfigStore,
     conn: libvirt.virConnect,
-    remote: RemotePath,
+    remote: paths.RemotePath,
     local: Path,
 ) -> int:
-    host, user, key_path, deadline = _connect_target(store, conn, remote.instance)
+    host, user, key_path, deadline = paths._connect_target(
+        store, conn, remote.instance
+    )
     stats = ssh.sync_from_remote(
         remote.instance,
         host,
