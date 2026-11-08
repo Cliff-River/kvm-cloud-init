@@ -1,0 +1,42 @@
+#cloud-config
+ssh_pwauth: true
+users:
+  - name: cliff
+    groups: sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+chpasswd:
+  list: |
+    root:sec202609
+    cliff:sec202609
+  expire: false
+disable_root: false
+package_update: true
+packages:
+  - vim
+  - xfce4
+  - xfce4-goodies
+  - xrdp
+  - ufw
+
+runcmd:
+  - [growpart, /dev/vda, 1]
+  - [resize2fs, "/dev/vda1"]
+  # 开机默认进入控制台
+  - [systemctl, set-default, multi-user.target]
+  # 将 xrdp 加入 ssl-cert 用户组（否则 xrdp 无法启动 TLS）
+  - [adduser, xrdp, ssl-cert]
+  # 放行 3389 端口
+  - [ufw, allow, 3389/tcp]
+  - [sh, -c, "ufw reload || true"]
+  # 启用并启动 xrdp
+  - [systemctl, enable, --now, xrdp]
+  # 用 Xfce 替换默认会话：注释末尾两行并追加 exec startxfce4
+  - |
+    sed -i \
+      -e 's|^test -x /etc/X11/Xsession.*|# &|' \
+      -e 's|^exec /bin/sh /etc/X11/Xsession|# &|' \
+      /etc/xrdp/startwm.sh
+  - echo 'exec startxfce4' >> /etc/xrdp/startwm.sh
+  - [systemctl, restart, xrdp]
