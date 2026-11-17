@@ -19,6 +19,7 @@ packages:
   - vim
   - curl
   - tar
+  - dnf-plugins-core  # Docker 必须
 write_files:
   # 重启后以 cliff 身份拉起 / 停止 minikube 集群
   - path: /etc/systemd/system/minikube.service
@@ -55,10 +56,16 @@ write_files:
 runcmd:
   - [growpart, /dev/vda, 4]
   - [xfs_growfs, /]
-  # 安装内核模块 for docker
-  - dnf install -y kernel-modules-extra-$(uname -r)
+  # 安装内核模块 for docker（发行版小版本滚动后仓库会下架旧内核的包，回退到 vault）
+  - |
+    pkg="kernel-modules-extra-$(uname -r)"
+    if ! dnf install -y "$pkg"; then
+      rel=$(uname -r | sed -n 's/.*\.el\([0-9]*\)_\([0-9]*\).*/\1.\2/p')
+      vault="https://vault.almalinux.org/${rel}/BaseOS/x86_64/os/Packages/${pkg}.rpm"
+      echo "Repository has no $pkg, falling back to $vault"
+      dnf install -y "$vault" || { echo "kernel-modules-extra 安装失败" >&2; exit 1; }
+    fi
   # 安装 Docker
-  - [  dnf, install, -y, dnf-plugins-core  ]
   # 添加 Docker CE 仓库（网络失败自动重试：最多 100 次，间隔 5 秒）
   - |
     n=0
