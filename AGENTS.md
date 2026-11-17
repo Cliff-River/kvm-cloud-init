@@ -94,7 +94,8 @@
   `hv/domains.shutdown_and_wait` / `stop_domain`（禁止第二套轮询）；
   `reboot` 用 `dom.reboot(0)`；`status` 只读打印六项键值。
 - cloud-init：用 paramiko 执行 `cloud-init status --format=json`（`json.loads`），
-  状态命令失败时回退 `sudo -n`（兼容仅 root 可读运行时文件的发行版）；
+  状态命令失败时回退 `sudo -n`（兼容仅 root 可读运行时文件的发行版），二次失败
+  提示 cloud-init 可能已完成并建议进入实例手动查询；
   `log -f` 走 `ssh.stream_command` 跟随 `/var/log/cloud-init.log`。
 - 销毁：优雅关机轮询 → 收集域/快照 XML 中外部文件并追 backing chain →
   删快照 → undefine（NVRAM/checkpoints/TPM 标志位）→ 清理残留卷与文件 →

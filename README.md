@@ -143,7 +143,9 @@ accordingly).
 2 seconds for up to 300 seconds; the status is read with
 `cloud-init status --format=json` (parsed with `json.loads`). If the SSH user
 cannot read root-only cloud-init runtime files, status commands automatically
-fall back to `sudo -n`. On success it
+fall back to `sudo -n`. If both queries fail, the error explains that cloud-init
+may already have completed and suggests running `sudo cloud-init status --long`
+manually inside the instance. On success it
 prints `Cloud-init completed successfully in <n>s.` and exits `0`. On failure
 it prints `Cloud-init failed:` plus the `--long` summary and the last 20 lines
 of `/var/log/cloud-init-output.log`, then exits `1` (the instance keeps
@@ -496,7 +498,8 @@ size 与整数秒 mtime 判重，因此传输后保留源 mtime；仅支持普�
 `create` 在域启动后默认等待 cloud-init：IP/SSH 每 2 秒重试，最多 300 秒；
 通过 `cloud-init status --format=json` 读取状态（用 `json.loads` 解析）。
 SSH 用户无权读取仅 root 可读的 cloud-init 运行时文件时，状态命令会自动回退到
-`sudo -n`。成功时打印 `Cloud-init completed successfully in <n>s.` 并退出 0；失败时向
+`sudo -n`。两次查询都失败时，错误信息会说明 cloud-init 可能已经完成，并提示进入
+实例手动运行 `sudo cloud-init status --long` 检查。成功时打印 `Cloud-init completed successfully in <n>s.` 并退出 0；失败时向
 stderr 打印 `Cloud-init failed:`、`--long` 摘要与
 `/var/log/cloud-init-output.log` 末尾 20 行，退出 1（实例保持运行）。
 `Ctrl+C` 会停止等待并打印

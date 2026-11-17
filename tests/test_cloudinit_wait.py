@@ -198,11 +198,37 @@ def test_query_state_falls_back_to_sudo(monkeypatch) -> None:
         if command == cloudinit_wait.STATUS_JSON_CMD:
             return "", "Permission denied: '/run/cloud-init/cloud.cfg'", 1
         if command == f"sudo -n {cloudinit_wait.STATUS_JSON_CMD}":
-            return '{"status": "done"}', "", 0
+            return '{"status": "done"}', "", 2
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
     assert cloudinit_wait.query._query_state("vm", TARGET) == "done"
+    assert seen == [
+        cloudinit_wait.STATUS_JSON_CMD,
+        f"sudo -n {cloudinit_wait.STATUS_JSON_CMD}",
+    ]
+
+
+def test_wait_permission_failure_suggests_manual_status(monkeypatch) -> None:
+    seen: list[str] = []
+
+    def capture(_instance, _host, _user, _key_path, command, *, _timeout=None):
+        seen.append(command)
+        if command == cloudinit_wait.STATUS_JSON_CMD:
+            return "", "Permission denied", 1
+        if command == f"sudo -n {cloudinit_wait.STATUS_JSON_CMD}":
+            return "", "sudo: a password is required", 1
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
+    with pytest.raises(CloudInitError) as exc_info:
+        cloudinit_wait.wait_cloud_init(object(), "vm")
+
+    message = str(exc_info.value)
+    assert "direct and sudo queries failed" in message
+    assert "Cloud-init may already have completed" in message
+    assert "sudo cloud-init status --long" in message
+    assert "Cannot parse" not in message
     assert seen == [
         cloudinit_wait.STATUS_JSON_CMD,
         f"sudo -n {cloudinit_wait.STATUS_JSON_CMD}",

@@ -32,10 +32,19 @@ def _capture_with_sudo(
 
 def _query_state(name: str, target: tuple[str, str, Path]) -> str:
     """读取 ``cloud-init status --format=json`` 的 status 字段。"""
-    out, err, _code = _capture_with_sudo(name, target, STATUS_JSON_CMD)
+    out, err, code = _capture_with_sudo(name, target, STATUS_JSON_CMD)
     try:
         data = json.loads(out)
     except json.JSONDecodeError as exc:
+        if code != 0:
+            raise CloudInitError(
+                f"Cannot query cloud-init status on instance {name} as user "
+                f"'{target[1]}': direct and sudo queries failed. Cloud-init "
+                "may already have completed, but permissions or another "
+                "command error prevented confirmation. Log in to instance "
+                f"{name} and run 'sudo cloud-init status --long' (or use a "
+                "root shell) to check it manually."
+            ) from exc
         detail = err.strip() or out.strip() or "empty output"
         raise CloudInitError(
             f"Cannot parse 'cloud-init status' output: {detail}"
