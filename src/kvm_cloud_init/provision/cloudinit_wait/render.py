@@ -120,7 +120,9 @@ class _ProgressLine:
 def _print_failure(name: str, target: tuple[str, str, Path]) -> None:
     print("Cloud-init failed:", file=sys.stderr)
     try:
-        long_out, long_err, _code = query._capture(name, target, STATUS_LONG_CMD)
+        long_out, long_err, _code = query._capture_with_sudo(
+            name, target, STATUS_LONG_CMD
+        )
         detail = (long_out or long_err).strip()
         if detail:
             print(detail, file=sys.stderr)

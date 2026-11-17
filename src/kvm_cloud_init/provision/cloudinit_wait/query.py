@@ -17,9 +17,22 @@ def _capture(
     return ssh.capture_command(name, host, user, key_path, command)
 
 
+def _capture_with_sudo(
+    name: str, target: tuple[str, str, Path], command: str
+) -> tuple[str, str, int]:
+    """状态命令失败时回退到免密 sudo，保留有效的非零状态输出。"""
+    direct = _capture(name, target, command)
+    if direct[2] == 0:
+        return direct
+    elevated = _capture(name, target, f"sudo -n {command}")
+    if elevated[2] == 0 or not direct[0].strip():
+        return elevated
+    return direct
+
+
 def _query_state(name: str, target: tuple[str, str, Path]) -> str:
     """读取 ``cloud-init status --format=json`` 的 status 字段。"""
-    out, err, _code = _capture(name, target, STATUS_JSON_CMD)
+    out, err, _code = _capture_with_sudo(name, target, STATUS_JSON_CMD)
     try:
         data = json.loads(out)
     except json.JSONDecodeError as exc:

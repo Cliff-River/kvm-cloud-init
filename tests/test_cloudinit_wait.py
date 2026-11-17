@@ -190,6 +190,25 @@ def test_verbose_renderer_truncates_long_lines(monkeypatch) -> None:
     assert "x" * 20 not in data
 
 
+def test_query_state_falls_back_to_sudo(monkeypatch) -> None:
+    seen: list[str] = []
+
+    def capture(_instance, _host, _user, _key_path, command, *, _timeout=None):
+        seen.append(command)
+        if command == cloudinit_wait.STATUS_JSON_CMD:
+            return "", "Permission denied: '/run/cloud-init/cloud.cfg'", 1
+        if command == f"sudo -n {cloudinit_wait.STATUS_JSON_CMD}":
+            return '{"status": "done"}', "", 0
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
+    assert cloudinit_wait.query._query_state("vm", TARGET) == "done"
+    assert seen == [
+        cloudinit_wait.STATUS_JSON_CMD,
+        f"sudo -n {cloudinit_wait.STATUS_JSON_CMD}",
+    ]
+
+
 def test_tail_lines_falls_back_to_sudo(monkeypatch) -> None:
     seen: list[str] = []
 
@@ -342,6 +361,23 @@ def test_cloud_init_status_exit_codes(
     _patch_capture(monkeypatch, state)
     assert cloudinit_wait.cloud_init_status(object(), "vm") == expected
     assert f"Cloud-init status: {state}" in capsys.readouterr().out
+
+
+def test_cloud_init_status_long_falls_back_to_sudo(monkeypatch, capsys) -> None:
+    def capture(_instance, _host, _user, _key_path, command, *, _timeout=None):
+        if command == cloudinit_wait.STATUS_JSON_CMD:
+            return '{"status": "done"}', "", 0
+        if command == cloudinit_wait.STATUS_LONG_CMD:
+            return "", "Permission denied", 1
+        if command == f"sudo -n {cloudinit_wait.STATUS_LONG_CMD}":
+            return "Cloud-init status: done", "", 0
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
+    assert cloudinit_wait.cloud_init_status(object(), "vm") == 0
+    captured = capsys.readouterr()
+    assert "Cloud-init status: done" in captured.out
+    assert captured.err == ""
 
 
 # ---- cloud-init log ------------------------------------------------------

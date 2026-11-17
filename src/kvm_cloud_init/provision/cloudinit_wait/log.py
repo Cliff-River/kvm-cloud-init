@@ -21,7 +21,7 @@ def cloud_init_status(
     target = access.ssh_target(conn, name)
     state = query._query_state(name, target)
 
-    out, err, _code = query._capture(name, target, STATUS_LONG_CMD)
+    out, err, _code = query._capture_with_sudo(name, target, STATUS_LONG_CMD)
     if out.strip():
         print(out.rstrip())
     if err.strip():
