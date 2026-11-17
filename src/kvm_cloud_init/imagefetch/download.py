@@ -15,9 +15,9 @@ from . import http
 from .models import (
     Client,
     DownloadResult,
+    PermanentError,
     Progress,
     RemoteTarget,
-    _PermanentError,
 )
 
 CHUNK_SIZE = 1024 * 1024
@@ -44,7 +44,7 @@ def download(
     校验失败会删除临时文件并重新尝试；全部候选失败时抛 ImageFetchError。
     正式镜像只有在调用方校验通过并原子重命名后才出现。
     """
-    http_client, owned = http._use_client(client)
+    http_client, owned = http.use_client(client)
     try:
         failures: list[str] = []
         for url in target.urls:
@@ -65,11 +65,11 @@ def download(
                 except _ChecksumMismatch as exc:
                     failures.append(str(exc))
                     _unlink(part_path)
-                except _PermanentError as exc:
+                except PermanentError as exc:
                     failures.append(f"{url} ({exc})")
                     break
                 except (httpx.HTTPError, OSError) as exc:
-                    failures.append(f"{url} ({http._describe(exc)})")
+                    failures.append(f"{url} ({http.describe(exc)})")
                     _unlink(part_path)
                 except KeyboardInterrupt:
                     # Ctrl+C 取消时清掉半成品，正式镜像始终保持不变
@@ -105,7 +105,7 @@ def _download_once(
     digest = hashlib.new(algo)
     written = 0
     with client.stream("GET", url) as response:
-        http._check_response(response)
+        http.check_response(response)
         total = _content_length(response)
         if total is None:
             # 部分源（如 AlmaLinux）用 chunked 传输，GET 无 Content-Length；
@@ -147,8 +147,8 @@ def _remote_size(client: Client, url: str) -> int | None:
     """用 HEAD 获取文件总大小；不支持或失败时返回 None（进度显示当前值）。"""
     try:
         response = client.head(url)
-        http._check_response(response)
-    except (httpx.HTTPError, _PermanentError):
+        http.check_response(response)
+    except (httpx.HTTPError, PermanentError):
         return None
     return _content_length(response)
 

@@ -22,16 +22,16 @@ FIXED_MTIME = 1_700_000_000
 
 @pytest.fixture
 def roots(tmp_path: Path, monkeypatch):
-    """:returns: (本地源/目标根, 远端根)，_connect 钉到 FakeClient。"""
+    """:returns: (本地源/目标根, 远端根)，connect 钉到 FakeClient。"""
     local = tmp_path / "local"
     remote = tmp_path / "remote"
     local.mkdir()
     remote.mkdir()
 
-    def fake_connect(instance, host, user, key_path, *, deadline=None, on_retry=None):
+    def fakeconnect(instance, host, user, key_path, *, deadline=None, on_retry=None):
         return FakeClient(FakeSFTP(remote))
 
-    monkeypatch.setattr(ssh.client, "_connect", fake_connect)
+    monkeypatch.setattr(ssh.client, "connect", fakeconnect)
     return local, remote
 
 
@@ -390,7 +390,7 @@ def test_sync_download_accepts_relative_remote_path(roots) -> None:
 @pytest.fixture
 def ready(monkeypatch):
     monkeypatch.setattr(paths.domains, "lookup_domain", lambda *_: object())
-    monkeypatch.setattr(paths.access, "_ensure_running", lambda *a: None)
+    monkeypatch.setattr(paths.access, "ensure_running", lambda *a: None)
     monkeypatch.setattr(
         paths.access,
         "wait_ssh_target",

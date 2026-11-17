@@ -50,7 +50,7 @@ def resolve_target(
             algo=source.checksum_algo,
         )
 
-    http_client, owned = http._use_client(client)
+    http_client, owned = http.use_client(client)
     try:
         failures: list[str] = []
         for page in source.pages:

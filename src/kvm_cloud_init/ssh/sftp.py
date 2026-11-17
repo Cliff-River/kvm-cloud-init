@@ -16,7 +16,7 @@ from ..errors import SshError
 from . import client
 
 
-def _sftp_reason(exc: OSError) -> str:
+def sftp_reason(exc: OSError) -> str:
     """把 SFTP 异常翻译成具体原因，避免直接展示 paramiko/OpenSSH 的裸 ``Failure``。"""
     if isinstance(exc, FileNotFoundError):
         return "no such file or directory"
@@ -53,7 +53,7 @@ def _sftp_reason(exc: OSError) -> str:
     return text
 
 
-def _local_reason(exc: OSError) -> str:
+def local_reason(exc: OSError) -> str:
     """本地文件系统异常的可读原因。"""
     detail = exc.strerror or str(exc) or exc.__class__.__name__
     filename = f": {exc.filename}" if getattr(exc, "filename", None) else ""
@@ -70,7 +70,7 @@ def remote_is_directory(
     deadline: float | None = None,
 ) -> bool:
     """远端路径是否为目录；路径不存在返回 False，其他 SFTP 错误抛 SshError。"""
-    ssh_client = client._connect(instance, host, user, key_path, deadline=deadline)
+    ssh_client = client.connect(instance, host, user, key_path, deadline=deadline)
     try:
         sftp = ssh_client.open_sftp()
         try:
@@ -81,7 +81,7 @@ def remote_is_directory(
             except OSError as exc:
                 raise SshError(
                     f"Cannot stat remote path {instance}:{remote_path}: "
-                    f"{_sftp_reason(exc)}"
+                    f"{sftp_reason(exc)}"
                 ) from exc
             return stat.S_ISDIR(attrs.st_mode or 0)
         finally:
@@ -90,7 +90,7 @@ def remote_is_directory(
         ssh_client.close()
 
 
-def _ensure_remote_dirs(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
+def ensure_remote_dirs(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
     """``mkdir -p``：逐级创建远端路径中缺失的目录。
 
     绝对路径从根开始；相对路径相对于 SFTP 默认目录（通常是登录用户的家
@@ -113,15 +113,15 @@ def _ensure_remote_dirs(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
                 ) from exc
             except OSError as exc:
                 raise SshError(
-                    f"Cannot create remote directory {current}: {_sftp_reason(exc)}"
+                    f"Cannot create remote directory {current}: {sftp_reason(exc)}"
                 ) from exc
         except OSError as exc:
             raise SshError(
-                f"Cannot access remote directory {current}: {_sftp_reason(exc)}"
+                f"Cannot access remote directory {current}: {sftp_reason(exc)}"
             ) from exc
 
 
-def _remote_kind(
+def remote_kind(
     sftp: paramiko.SFTPClient, instance: str, remote_path: str
 ) -> int:
     """lstat 远端路径并返回 S_IF* 类型位；路径不存在抛带具体原因的 SshError。"""
@@ -133,7 +133,7 @@ def _remote_kind(
         ) from exc
     except OSError as exc:
         raise SshError(
-            f"Cannot stat remote path {instance}:{remote_path}: {_sftp_reason(exc)}"
+            f"Cannot stat remote path {instance}:{remote_path}: {sftp_reason(exc)}"
         ) from exc
     return stat.S_IFMT(attrs.st_mode or 0)
 
@@ -156,7 +156,7 @@ def _download_tree(
         raise SshError(f"Local path is not a directory: {local_dir}") from exc
     except OSError as exc:
         raise SshError(
-            f"Cannot create local directory {local_dir}: {_local_reason(exc)}"
+            f"Cannot create local directory {local_dir}: {local_reason(exc)}"
         ) from exc
 
     try:
@@ -164,7 +164,7 @@ def _download_tree(
     except OSError as exc:
         raise SshError(
             f"Cannot list remote directory {instance}:{remote_dir}: "
-            f"{_sftp_reason(exc)}"
+            f"{sftp_reason(exc)}"
         ) from exc
 
     for entry in sorted(entries, key=lambda item: item.filename):
@@ -192,7 +192,7 @@ def _download_tree(
         except OSError as exc:
             raise SshError(
                 f"Cannot download {instance}:{remote_child} to {local_child}: "
-                f"{_sftp_reason(exc)}"
+                f"{sftp_reason(exc)}"
             ) from exc
 
 
@@ -207,18 +207,18 @@ def _upload_tree(
     try:
         sftp.stat(remote_dir)
     except FileNotFoundError:
-        _ensure_remote_dirs(sftp, remote_dir)
+        ensure_remote_dirs(sftp, remote_dir)
     except OSError as exc:
         raise SshError(
             f"Cannot access remote directory {instance}:{remote_dir}: "
-            f"{_sftp_reason(exc)}"
+            f"{sftp_reason(exc)}"
         ) from exc
 
     try:
         children = sorted(os.scandir(local_dir), key=lambda item: item.name)
     except OSError as exc:
         raise SshError(
-            f"Cannot list local directory {local_dir}: {_local_reason(exc)}"
+            f"Cannot list local directory {local_dir}: {local_reason(exc)}"
         ) from exc
 
     for entry in children:
@@ -247,7 +247,7 @@ def _upload_tree(
         except OSError as exc:
             raise SshError(
                 f"Cannot upload {local_child} to {instance}:{remote_child}: "
-                f"{_sftp_reason(exc)}"
+                f"{sftp_reason(exc)}"
             ) from exc
 
 
@@ -264,7 +264,7 @@ def upload_path(
     """上传本地文件或目录（递归）到 ``remote_path``，返回传输的普通文件数。"""
     if not local_path.exists() and not local_path.is_symlink():
         raise SshError(f"Local path not found: {local_path}")
-    ssh_client = client._connect(instance, host, user, key_path, deadline=deadline)
+    ssh_client = client.connect(instance, host, user, key_path, deadline=deadline)
     try:
         sftp = ssh_client.open_sftp()
         counts = [0]
@@ -277,13 +277,13 @@ def upload_path(
             elif local_path.is_file():
                 parent = posixpath.dirname(remote_path.rstrip("/"))
                 if parent and parent != "/":
-                    _ensure_remote_dirs(sftp, parent)
+                    ensure_remote_dirs(sftp, parent)
                 try:
                     sftp.put(str(local_path), remote_path)
                 except OSError as exc:
                     raise SshError(
                         f"Cannot upload {local_path} to {instance}:{remote_path}: "
-                        f"{_sftp_reason(exc)}"
+                        f"{sftp_reason(exc)}"
                     ) from exc
                 counts[0] += 1
             else:
@@ -296,7 +296,7 @@ def upload_path(
         except (OSError, paramiko.SSHException) as exc:
             raise SshError(
                 f"Cannot upload {local_path} to {instance}:{remote_path}: "
-                f"{_sftp_reason(exc) if isinstance(exc, OSError) else exc}"
+                f"{sftp_reason(exc) if isinstance(exc, OSError) else exc}"
             ) from exc
         finally:
             sftp.close()
@@ -316,12 +316,12 @@ def download_path(
     deadline: float | None = None,
 ) -> int:
     """下载远端文件或目录（递归）到 ``local_path``，返回传输的普通文件数。"""
-    ssh_client = client._connect(instance, host, user, key_path, deadline=deadline)
+    ssh_client = client.connect(instance, host, user, key_path, deadline=deadline)
     try:
         sftp = ssh_client.open_sftp()
         counts = [0]
         try:
-            kind = _remote_kind(sftp, instance, remote_path)
+            kind = remote_kind(sftp, instance, remote_path)
             if stat.S_ISLNK(kind):
                 link_target = sftp.readlink(remote_path)
                 if local_path.is_symlink() or local_path.exists():
@@ -345,7 +345,7 @@ def download_path(
                 except OSError as exc:
                     raise SshError(
                         f"Cannot download {instance}:{remote_path} to "
-                        f"{local_path}: {_sftp_reason(exc)}"
+                        f"{local_path}: {sftp_reason(exc)}"
                     ) from exc
                 counts[0] += 1
             else:

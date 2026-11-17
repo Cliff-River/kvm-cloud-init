@@ -14,7 +14,7 @@ from parsel import Selector
 from ..errors import ImageFetchError
 from . import http
 from .archive import ARCHIVE_SUFFIXES
-from .models import Client, RemoteImage, _PermanentError
+from .models import Client, PermanentError, RemoteImage
 
 _EXTENSIONS = ARCHIVE_SUFFIXES + (".qcow2", ".img", ".raw")
 
@@ -65,7 +65,7 @@ def pick_latest(
     if not candidates:
         raise ImageFetchError("Empty image candidate list")
     if order_by == "mtime":
-        http_client, owned = http._use_client(client)
+        http_client, owned = http.use_client(client)
         try:
             stamped = [
                 (mtime_of(item.url, client=http_client, sleep=sleep), item)
@@ -93,12 +93,12 @@ def mtime_of(
     sleep: Callable[[float], None] = time.sleep,
 ) -> float | None:
     """HEAD 请求的 Last-Modified 时间戳；不支持或失败时返回 None。"""
-    http_client, owned = http._use_client(client)
+    http_client, owned = http.use_client(client)
     try:
 
         def head() -> float | None:
             response = http_client.head(url)
-            http._check_response(response)
+            http.check_response(response)
             value = response.headers.get("Last-Modified")
             if not value:
                 return None
@@ -108,8 +108,8 @@ def mtime_of(
                 return None
 
         try:
-            result = http._attempt(url, head, sleep=sleep)
-        except _PermanentError:
+            result = http.attempt(url, head, sleep=sleep)
+        except PermanentError:
             return None
         return result if isinstance(result, float) else None
     finally:

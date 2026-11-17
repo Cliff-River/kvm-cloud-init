@@ -80,7 +80,7 @@ def _remote_list(
     except OSError as exc:
         raise SshError(
             f"Cannot list remote directory {instance}:{remote_dir}: "
-            f"{sftp._sftp_reason(exc)}"
+            f"{sftp.sftp_reason(exc)}"
         ) from exc
     return {entry.filename: entry for entry in entries}
 
@@ -112,7 +112,7 @@ def _remove_remote_tree(
     except OSError as exc:
         raise SshError(
             f"Cannot delete {instance}:{remote_path}: "
-            f"{sftp._sftp_reason(exc)}"
+            f"{sftp.sftp_reason(exc)}"
         ) from exc
 
 
@@ -129,7 +129,7 @@ def _remove_local_tree(path: Path, stats: SyncStats) -> None:
         stats.deleted.append(str(path))
     except OSError as exc:
         raise SshError(
-            f"Cannot delete local path {path}: {sftp._local_reason(exc)}"
+            f"Cannot delete local path {path}: {sftp.local_reason(exc)}"
         ) from exc
 
 
@@ -147,7 +147,7 @@ def _sync_dir_upload(
         }
     except OSError as exc:
         raise SshError(
-            f"Cannot list local directory {src_dir}: {sftp._local_reason(exc)}"
+            f"Cannot list local directory {src_dir}: {sftp.local_reason(exc)}"
         ) from exc
 
     dest_entries = _remote_list(sftp_client, instance, dst_dir)
@@ -181,7 +181,7 @@ def _sync_dir_upload(
                     )  # type: ignore[arg-type]
                     dst_kind = None
                 if dst_kind is None:
-                    sftp._ensure_remote_dirs(sftp_client, dst_path)
+                    sftp.ensure_remote_dirs(sftp_client, dst_path)
                     stats.dirs_created += 1
                 _sync_dir_upload(
                     sftp_client, instance, src_path, dst_path, stats
@@ -216,7 +216,7 @@ def _sync_dir_upload(
         except OSError as exc:
             raise SshError(
                 f"Cannot sync {src_path} to {instance}:{dst_path}: "
-                f"{sftp._sftp_reason(exc)}"
+                f"{sftp.sftp_reason(exc)}"
             ) from exc
 
     # 目标中剩余条目在源中已不存在：递归删除
@@ -255,7 +255,7 @@ def _sync_dir_download(
         raise SshError(f"Local path not found: {dst_dir}") from exc
     except OSError as exc:
         raise SshError(
-            f"Cannot list local directory {dst_dir}: {sftp._local_reason(exc)}"
+            f"Cannot list local directory {dst_dir}: {sftp.local_reason(exc)}"
         ) from exc
 
     for name, src_attrs in sorted(source_entries.items()):
@@ -312,7 +312,7 @@ def _sync_dir_download(
         except OSError as exc:
             raise SshError(
                 f"Cannot sync {instance}:{src_path} to {dst_path}: "
-                f"{sftp._sftp_reason(exc)}"
+                f"{sftp.sftp_reason(exc)}"
             ) from exc
 
     for name in sorted(dest_names):
@@ -337,7 +337,7 @@ def sync_to_remote(
     if not local_dir.is_dir():
         raise SshError(f"Local source directory not found: {local_dir}")
     _guard_remote_sync_target(remote_path)
-    ssh_client = client._connect(
+    ssh_client = client.connect(
         instance, host, user, key_path, deadline=deadline
     )
     stats = SyncStats()
@@ -355,7 +355,7 @@ def sync_to_remote(
                         f"{instance}:{remote_path}"
                     )
             except FileNotFoundError:
-                sftp._ensure_remote_dirs(sftp_client, remote_path)
+                sftp.ensure_remote_dirs(sftp_client, remote_path)
                 stats.dirs_created += 1
             _sync_dir_upload(
                 sftp_client, instance, local_dir, remote_path, stats
@@ -384,7 +384,7 @@ def sync_from_remote(
     """
     _guard_remote_sync_target(remote_path)
     _guard_local_sync_target(local_dir)
-    ssh_client = client._connect(
+    ssh_client = client.connect(
         instance, host, user, key_path, deadline=deadline
     )
     stats = SyncStats()
@@ -393,7 +393,7 @@ def sync_from_remote(
         try:
             if _resolved_remote_path(sftp_client, remote_path) == "/":
                 raise SshError("Refusing to sync from remote path '/'")
-            kind = sftp._remote_kind(sftp_client, instance, remote_path)
+            kind = sftp.remote_kind(sftp_client, instance, remote_path)
             if not stat.S_ISDIR(kind):
                 raise SshError(
                     f"Remote source is not a directory: {instance}:{remote_path}"
@@ -408,7 +408,7 @@ def sync_from_remote(
                 except OSError as exc:
                     raise SshError(
                         f"Cannot create local directory {local_dir}: "
-                        f"{sftp._local_reason(exc)}"
+                        f"{sftp.local_reason(exc)}"
                     ) from exc
                 stats.dirs_created += 1
             _sync_dir_download(

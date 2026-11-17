@@ -115,15 +115,15 @@
   的 paramiko SFTP put/get
   传输；普通文件直接拷贝，目录递归拷贝并按符号链接重建（`upload_path`/
   `download_path`，lstat 判定类型、远端父目录自动 mkdir -p）；目标端是已
-  存在目录时追加源 basename；不调 scp/sftp。错误经 `_sftp_reason`/
-  `_local_reason` 分类（路径不存在、权限拒绝、本地父目录缺失、裸
+  存在目录时追加源 basename；不调 scp/sftp。错误经 `sftp_reason`/
+  `local_reason` 分类（路径不存在、权限拒绝、本地父目录缺失、裸
   `Failure` 等），不得把 paramiko 的 `Failure` 直接展示给用户。
 - sync：`provision/files/sync.py` 复用 `files.paths.parse_remote` 判方向（双远程/双
   本地均报错），复用 access 的自动启动与 SSH 等待；能力层在 `ssh/sync.py`
   （`sync_to_remote`/`sync_from_remote` + `SyncStats`）。语义为 `rclone sync`
   而非 rsync：两端必须都是目录，同步的是源目录**内容**，目标中源已不存在
   的条目递归删除（文件/目录/符号链接各计 1）；远端路径可相对（相对 SFTP
-  默认目录即登录用户家目录，与 cp/scp 一致，`_ensure_remote_dirs` 同时支持
+  默认目录即登录用户家目录，与 cp/scp 一致，`ensure_remote_dirs` 同时支持
   绝对/相对路径逐级创建）；普通文件以 size + 整数秒 mtime 判重，传输后
   utime 保留源 mtime；符号链接比对 readlink 目标，类型不匹配（文件↔目录↔
   链接）先删后建；仅支持普通文件/目录/符号链接。本地或远端路径为 `/` 一律
@@ -196,7 +196,7 @@ README（中英双语）、五个 `.conf` 示例（含 `images.user.conf`）与�
 - `hv/` 不叫 `libvirt/`，避免与第三方 libvirt 包同名。
 - paramiko 5.x 的 `Ed25519Key` 无 `generate()`：`ssh.keys._generate_key` 用
   `getattr(..., "generate", None)` 探测，缺失时回退 `RSAKey.generate(3072)`。
-- SSH 连接重试在 `ssh.client._connect` 内：连接/握手失败每 `CONNECT_RETRY_INTERVAL`
+- SSH 连接重试在 `ssh.client.connect` 内：连接/握手失败每 `CONNECT_RETRY_INTERVAL`
   （2s）重试到 `deadline`（`time.monotonic()` 绝对时间，缺省
   `now + CONNECT_RETRY_TIMEOUT`=60s），认证失败立即失败不重试；
   `shell`/`exec` 由 `access` 传入与 IP 等待共用的 300 秒 deadline，

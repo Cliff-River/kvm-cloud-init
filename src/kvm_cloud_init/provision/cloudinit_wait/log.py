@@ -19,9 +19,9 @@ def cloud_init_status(
 ) -> int:
     """打印 cloud-init 状态；done=0，running/not started=2，error=1。"""
     target = access.ssh_target(conn, name)
-    state = query._query_state(name, target)
+    state = query.query_state(name, target)
 
-    out, err, _code = query._capture_with_sudo(name, target, STATUS_LONG_CMD)
+    out, err, _code = query.capture_with_sudo(name, target, STATUS_LONG_CMD)
     if out.strip():
         print(out.rstrip())
     if err.strip():
@@ -43,7 +43,7 @@ def cloud_init_log(
     if not follow:
         return _print_log(name, target)
 
-    state = query._query_state(name, target)
+    state = query.query_state(name, target)
     if state in ("done", "error"):
         _print_log(name, target)
         return 0 if state == "done" else 1
@@ -54,7 +54,7 @@ def cloud_init_log(
         now = time.monotonic()
         if now - holder["checked"] >= POLL_INTERVAL:
             try:
-                holder["state"] = query._query_state(name, target)
+                holder["state"] = query.query_state(name, target)
             except ssh.SshError:
                 pass
             holder["checked"] = now
@@ -62,9 +62,9 @@ def cloud_init_log(
 
     host, user, key_path = target
     command = f"tail -n +1 -F {LOG_FILE}"
-    if query._can_read(name, target, LOG_FILE):
+    if query.can_read(name, target, LOG_FILE):
         pass
-    elif query._can_read(name, target, LOG_FILE, sudo=True):
+    elif query.can_read(name, target, LOG_FILE, sudo=True):
         command = f"sudo -n {command}"
     else:
         print(
@@ -86,9 +86,9 @@ def cloud_init_log(
 
 
 def _print_log(name: str, target: tuple[str, str, Path]) -> int:
-    out, err, code = query._capture(name, target, f"cat {LOG_FILE}")
+    out, err, code = query.capture(name, target, f"cat {LOG_FILE}")
     if code != 0:
-        out, err, code = query._capture(name, target, f"sudo -n cat {LOG_FILE}")
+        out, err, code = query.capture(name, target, f"sudo -n cat {LOG_FILE}")
     sys.stdout.write(out)
     sys.stdout.flush()
     if err:

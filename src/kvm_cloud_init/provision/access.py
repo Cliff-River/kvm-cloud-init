@@ -19,7 +19,7 @@ SSH_READY_TIMEOUT = 300
 SSH_POLL_INTERVAL = 2.0
 
 
-def _ensure_running(
+def ensure_running(
     store: ConfigStore, conn: libvirt.virConnect, name: str
 ) -> None:
     """实例未运行时自动启动，已运行则直接返回。"""
@@ -112,7 +112,7 @@ def shell_instance(
     ``port_forwards`` 为 ``(本地端口, 虚拟机端口)`` 序列时，在 shell 存活
     期间复用同一 SSH 连接做本地端口转发。
     """
-    _ensure_running(store, conn, name)
+    ensure_running(store, conn, name)
     # IP 就绪与 sshd 就绪共用同一个等待窗口：IP 常常早于 sshd 出现。
     deadline = time.monotonic() + SSH_READY_TIMEOUT
     host, user, key_path = wait_ssh_target(conn, name, deadline=deadline)
@@ -131,7 +131,7 @@ def exec_instance(
     store: ConfigStore, conn: libvirt.virConnect, name: str, command: list[str]
 ) -> int:
     """在实例中执行一条命令（-- 之后的所有 token 拼接），已关机时先自动启动。"""
-    _ensure_running(store, conn, name)
+    ensure_running(store, conn, name)
     deadline = time.monotonic() + SSH_READY_TIMEOUT
     host, user, key_path = wait_ssh_target(conn, name, deadline=deadline)
     return ssh.run_command(

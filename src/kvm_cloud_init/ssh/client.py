@@ -21,10 +21,10 @@ CONNECT_RETRY_INTERVAL = 2.0
 #: 连接失败后的重试总时长（秒）；调用方可用 deadline 覆盖
 CONNECT_RETRY_TIMEOUT = 60.0
 #: 读写缓冲区
-_BUFSIZE = 65536
+BUFSIZE = 65536
 
 
-def _connect(
+def connect(
     instance: str,
     host: str,
     user: str,

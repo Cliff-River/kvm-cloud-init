@@ -101,16 +101,16 @@ class FakeClient:
 
 @pytest.fixture
 def remote_tree(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
-    """:returns: (远端根目录, 本地下载目标目录)，并把 _connect 钉到 FakeClient。"""
+    """:returns: (远端根目录, 本地下载目标目录)，并把 connect 钉到 FakeClient。"""
     root = tmp_path / "remote"
     root.mkdir()
     dest = tmp_path / "local"
     dest.mkdir()
 
-    def fake_connect(instance, host, user, key_path, *, deadline=None, on_retry=None):
+    def fakeconnect(instance, host, user, key_path, *, deadline=None, on_retry=None):
         return FakeClient(FakeSFTP(root))
 
-    monkeypatch.setattr(ssh.client, "_connect", fake_connect)
+    monkeypatch.setattr(ssh.client, "connect", fakeconnect)
     return root, dest
 
 
@@ -250,7 +250,7 @@ def test_upload_directory_recursively_with_symlink(remote_tree, tmp_path: Path) 
     assert os.readlink(link) == "a.txt"
 
 
-def test_upload_missing_local_path_raises_before_connecting(
+def test_upload_missing_local_path_raises_beforeconnecting(
     remote_tree, tmp_path: Path
 ) -> None:
     with pytest.raises(SshError, match="Local path not found"):
@@ -265,7 +265,7 @@ def test_sftp_session_is_closed(remote_tree, tmp_path: Path, monkeypatch) -> Non
     local = tmp_path / "a.txt"
     local.write_text("x")
     client = FakeClient(FakeSFTP(root))
-    monkeypatch.setattr(ssh.client, "_connect", lambda *a, **k: client)
+    monkeypatch.setattr(ssh.client, "connect", lambda *a, **k: client)
 
     ssh.upload_path(
         "vm1", "10.0.0.5", "cliff", Path("/k/vm1"), local, "/a.txt"

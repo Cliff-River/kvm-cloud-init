@@ -47,5 +47,5 @@ class DownloadResult:
     size: int
 
 
-class _PermanentError(Exception):
+class PermanentError(Exception):
     """不可重试的失败（如 404），直接切换到下一个候选地址。"""

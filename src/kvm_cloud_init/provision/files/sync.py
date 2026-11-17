@@ -134,7 +134,7 @@ def _sync_up(
 ) -> int:
     if not local.is_dir():
         raise ProvisionError(f"Local source directory not found: {local}")
-    host, user, key_path, deadline = paths._connect_target(
+    host, user, key_path, deadline = paths.connect_target(
         store, conn, remote.instance
     )
     stats = ssh.sync_to_remote(
@@ -160,7 +160,7 @@ def _sync_down(
     remote: paths.RemotePath,
     local: Path,
 ) -> int:
-    host, user, key_path, deadline = paths._connect_target(
+    host, user, key_path, deadline = paths.connect_target(
         store, conn, remote.instance
     )
     stats = ssh.sync_from_remote(

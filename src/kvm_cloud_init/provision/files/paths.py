@@ -38,14 +38,14 @@ def parse_remote(spec: str) -> RemotePath | None:
     return RemotePath(instance=instance, path=path)
 
 
-def _connect_target(
+def connect_target(
     store: ConfigStore, conn: libvirt.virConnect, instance: str
 ) -> tuple[str, str, Path, float]:
     """校验实例存在、必要时自动启动，并等待 SSH 就绪。"""
     dom = domains.lookup_domain(conn, instance)
     if dom is None:
         raise ProvisionError(f"Instance {instance} does not exist")
-    access._ensure_running(store, conn, instance)
+    access.ensure_running(store, conn, instance)
     deadline = time.monotonic() + _SSH_READY_TIMEOUT
     host, user, key_path = access.wait_ssh_target(
         conn, instance, deadline=deadline

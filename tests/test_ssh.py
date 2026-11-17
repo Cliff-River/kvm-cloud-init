@@ -153,7 +153,7 @@ def test_run_command_passes_command_and_returns_remote_status(
 ) -> None:
     chan = _FakeChannel(out=b"hello\n", err=b"", status=3)
     client = _FakeClient(chan)
-    monkeypatch.setattr(ssh.client, "_connect", lambda *a, **k: client)
+    monkeypatch.setattr(ssh.client, "connect", lambda *a, **k: client)
 
     rc = ssh.run_command("vm1", "10.0.0.5", "cliff", Path("/k"), "ls -l /")
 
@@ -168,7 +168,7 @@ def test_run_command_requests_pty_when_both_stdio_are_ttys(
 ) -> None:
     chan = _FakeChannel(out=b"$ ", err=b"", status=0)
     client = _FakeClient(chan)
-    monkeypatch.setattr(ssh.client, "_connect", lambda *a, **k: client)
+    monkeypatch.setattr(ssh.client, "connect", lambda *a, **k: client)
     monkeypatch.setattr(ssh.session, "_stdio_is_tty", lambda: True)
     monkeypatch.setattr(ssh.session.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(ssh.session.sys.stdin, "fileno", lambda: 0)
@@ -195,7 +195,7 @@ def test_run_command_pty_forwards_stdin_until_local_eof(
     # 确保 stdin 转发与本地 EOF 分支都能被执行到。
     chan = _FakeChannel(out=b"$ ", status=0, hold_exit=2)
     client = _FakeClient(chan)
-    monkeypatch.setattr(ssh.client, "_connect", lambda *a, **k: client)
+    monkeypatch.setattr(ssh.client, "connect", lambda *a, **k: client)
     monkeypatch.setattr(ssh.session, "_stdio_is_tty", lambda: True)
     monkeypatch.setattr(ssh.session.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(ssh.session.sys.stdin, "fileno", lambda: 0)
@@ -227,7 +227,7 @@ def test_interactive_shell_returns_remote_exit_status(
 ) -> None:
     chan = _FakeChannel(out=b"hi\n", err=b"", status=5)
     client = _FakeClient(chan)
-    monkeypatch.setattr(ssh.client, "_connect", lambda *a, **k: client)
+    monkeypatch.setattr(ssh.client, "connect", lambda *a, **k: client)
     monkeypatch.setattr(ssh.session, "_sync_window_size", lambda c: None)
     monkeypatch.setattr(ssh.session.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(ssh.session.sys.stdin, "fileno", lambda: 0)
@@ -285,7 +285,7 @@ def test_connect_retries_until_sshd_accepts(monkeypatch) -> None:
     monkeypatch.setattr(ssh.client.time, "sleep", lambda seconds: sleeps.append(seconds))
     retries: list[tuple[int, float]] = []
 
-    client = ssh.client._connect(
+    client = ssh.client.connect(
         "vm1",
         "10.0.0.5",
         "cliff",
@@ -309,7 +309,7 @@ def test_connect_gives_up_after_deadline(monkeypatch) -> None:
     monkeypatch.setattr(ssh.client.time, "sleep", lambda _seconds: None)
 
     with pytest.raises(SshError, match=r"Cannot connect to instance vm1 .* after 100s"):
-        ssh.client._connect("vm1", "10.0.0.5", "cliff", Path("/k"), deadline=100.0)
+        ssh.client.connect("vm1", "10.0.0.5", "cliff", Path("/k"), deadline=100.0)
 
     assert len(clients) == 2
     assert all(client.closed for client in clients)
@@ -324,7 +324,7 @@ def test_connect_does_not_retry_authentication_failure(monkeypatch) -> None:
     monkeypatch.setattr(ssh.client.time, "sleep", lambda seconds: sleeps.append(seconds))
 
     with pytest.raises(SshError, match="Cannot connect to instance vm1"):
-        ssh.client._connect("vm1", "10.0.0.5", "cliff", Path("/k"), deadline=100.0)
+        ssh.client.connect("vm1", "10.0.0.5", "cliff", Path("/k"), deadline=100.0)
 
     assert len(clients) == 1
     assert clients[0].closed

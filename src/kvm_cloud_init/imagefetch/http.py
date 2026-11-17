@@ -12,7 +12,7 @@ import httpx
 
 from .. import __version__
 from ..errors import ImageFetchError
-from .models import Client, _PermanentError
+from .models import Client, PermanentError
 
 TIMEOUT = 30
 RETRIES = 3
@@ -29,31 +29,31 @@ def new_client() -> Client:
     )
 
 
-def _use_client(client: Client | None) -> tuple[Client, bool]:
+def use_client(client: Client | None) -> tuple[Client, bool]:
     """返回 (客户端, 是否由本模块创建)，便于统一关闭临时客户端。"""
     if client is not None:
         return client, False
     return new_client(), True
 
 
-def _describe(exc: BaseException) -> str:
+def describe(exc: BaseException) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         return f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
     return str(exc) or exc.__class__.__name__
 
 
-def _check_response(response: httpx.Response) -> None:
+def check_response(response: httpx.Response) -> None:
     """4xx（除 408/429）视为不可重试，其余状态错误交由重试逻辑处理。"""
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
         if 400 <= code < 500 and code not in (408, 429):
-            raise _PermanentError(_describe(exc)) from exc
+            raise PermanentError(describe(exc)) from exc
         raise
 
 
-def _attempt(
+def attempt(
     url: str,
     action: Callable[[], object],
     *,
@@ -64,14 +64,14 @@ def _attempt(
     for attempt in range(RETRIES):
         try:
             return action()
-        except _PermanentError:
+        except PermanentError:
             raise
         except (httpx.HTTPError, OSError) as exc:
             last = exc
             if attempt + 1 < RETRIES:
                 sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
     assert last is not None
-    raise _PermanentError(_describe(last)) from last
+    raise PermanentError(describe(last)) from last
 
 
 def fetch_text(
@@ -81,13 +81,13 @@ def fetch_text(
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
     """按顺序尝试候选地址，返回第一份可读文本；全部失败抛 ImageFetchError。"""
-    http, owned = _use_client(client)
+    http, owned = use_client(client)
     try:
         failures: list[str] = []
         for url in urls:
             try:
                 return _fetch_text_one(url, http, sleep=sleep)
-            except _PermanentError as exc:
+            except PermanentError as exc:
                 failures.append(f"{url} ({exc})")
         raise ImageFetchError(
             "Failed to fetch " + "; ".join(failures) if failures else "Failed to fetch"
@@ -105,7 +105,7 @@ def _fetch_text_one(
 ) -> str:
     def read() -> str:
         response = http.get(url)
-        _check_response(response)
+        check_response(response)
         return response.text
 
-    return str(_attempt(url, read, sleep=sleep))
+    return str(attempt(url, read, sleep=sleep))

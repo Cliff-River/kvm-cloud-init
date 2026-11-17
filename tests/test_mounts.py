@@ -71,7 +71,7 @@ def env(monkeypatch):
     dom = FakeDom(_base_xml())
     conn = FakeConn(dom)
     monkeypatch.setattr(mounts.domains, "lookup_domain", lambda _c, _n: dom)
-    monkeypatch.setattr(mounts.access, "_ensure_running", lambda *a: None)
+    monkeypatch.setattr(mounts.access, "ensure_running", lambda *a: None)
     monkeypatch.setattr(
         mounts.access,
         "wait_ssh_target",

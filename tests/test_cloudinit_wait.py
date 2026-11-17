@@ -183,7 +183,7 @@ def test_verbose_renderer_truncates_long_lines(monkeypatch) -> None:
         "get_terminal_size",
         lambda *_args: os.terminal_size((20, 24)),
     )
-    renderer = cloudinit_wait.render._VerboseRenderer(stream)
+    renderer = cloudinit_wait.render.VerboseRenderer(stream)
     renderer.update("running", ["x" * 100])
     data = stream.getvalue()
     assert "x" * 19 in data
@@ -202,7 +202,7 @@ def test_query_state_falls_back_to_sudo(monkeypatch) -> None:
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
-    assert cloudinit_wait.query._query_state("vm", TARGET) == "done"
+    assert cloudinit_wait.query.query_state("vm", TARGET) == "done"
     assert seen == [
         cloudinit_wait.STATUS_JSON_CMD,
         f"sudo -n {cloudinit_wait.STATUS_JSON_CMD}",
@@ -245,7 +245,7 @@ def test_tail_lines_falls_back_to_sudo(monkeypatch) -> None:
         return "", "Permission denied", 1
 
     monkeypatch.setattr(cloudinit_wait.query.ssh, "capture_command", capture)
-    lines = cloudinit_wait.query._tail_lines(
+    lines = cloudinit_wait.query.tail_lines(
         "vm", TARGET, cloudinit_wait.OUTPUT_LOG, 6
     )
     assert lines == ["a", "b"]
@@ -260,7 +260,7 @@ def test_tail_lines_raises_when_unreadable(monkeypatch) -> None:
         lambda *_args, **_kwargs: ("", "Permission denied", 1),
     )
     with pytest.raises(CloudInitError, match="Cannot read"):
-        cloudinit_wait.query._tail_lines("vm", TARGET, cloudinit_wait.OUTPUT_LOG, 6)
+        cloudinit_wait.query.tail_lines("vm", TARGET, cloudinit_wait.OUTPUT_LOG, 6)
 
 
 def test_wait_verbose_reports_unreadable_log(monkeypatch, capsys) -> None:

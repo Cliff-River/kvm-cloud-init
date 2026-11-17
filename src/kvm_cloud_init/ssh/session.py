@@ -49,7 +49,7 @@ def interactive_shell(
     ``port_forwards`` 为 ``(本地端口, 虚拟机端口)`` 序列时，会在 shell 存活
     期间于同一 SSH Transport 上建立本地端口转发，退出时统一关闭。
     """
-    ssh_client = client._connect(
+    ssh_client = client.connect(
         instance, host, user, key_path, deadline=deadline, on_retry=on_retry
     )
     forwarder: PortForwarder | None = None
@@ -112,12 +112,12 @@ def _pump(chan: paramiko.Channel, stdin_fd: int | None) -> int:
             watch.append(stdin_fd)
         readable, _, _ = select.select(watch, [], [], 0.5)
         if chan.recv_ready():
-            data = chan.recv(client._BUFSIZE)
+            data = chan.recv(client.BUFSIZE)
             if data:
                 sys.stdout.buffer.write(data)
                 sys.stdout.buffer.flush()
         if stdin_fd is not None and stdin_fd in readable:
-            data = os.read(stdin_fd, client._BUFSIZE)
+            data = os.read(stdin_fd, client.BUFSIZE)
             if data:
                 # 通道处于非阻塞模式，发送时临时切回阻塞，避免短写自旋。
                 chan.settimeout(None)
@@ -150,7 +150,7 @@ def run_command(
     并双向转发，使远端交互式程序可正常使用；重定向或管道场景保持
     不分配 PTY，避免 CRLF 与终端格式污染。
     """
-    ssh_client = client._connect(
+    ssh_client = client.connect(
         instance, host, user, key_path, deadline=deadline, on_retry=on_retry
     )
     try:
@@ -174,11 +174,11 @@ def _drain(chan: paramiko.Channel) -> None:
     while True:
         moved = False
         if chan.recv_ready():
-            sys.stdout.buffer.write(chan.recv(client._BUFSIZE))
+            sys.stdout.buffer.write(chan.recv(client.BUFSIZE))
             sys.stdout.buffer.flush()
             moved = True
         if chan.recv_stderr_ready():
-            sys.stderr.buffer.write(chan.recv_stderr(client._BUFSIZE))
+            sys.stderr.buffer.write(chan.recv_stderr(client.BUFSIZE))
             sys.stderr.buffer.flush()
             moved = True
         if (

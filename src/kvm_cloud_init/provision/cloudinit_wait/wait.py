@@ -28,7 +28,7 @@ def _wait_target(
     conn: libvirt.virConnect,
     name: str,
     deadline: float,
-    progress: render._ProgressLine | None = None,
+    progress: render.ProgressLine | None = None,
     started: float = 0.0,
 ) -> tuple[str, str, Path]:
     """轮询解析 SSH 目标，直到 IP 可用或超时。"""
@@ -56,8 +56,8 @@ def wait_cloud_init(
     """等待 cloud-init 结束，返回 0（成功/用户中断）或 1（失败）。"""
     started = time.monotonic()
     deadline = started + SSH_READY_TIMEOUT
-    verbose_renderer = render._VerboseRenderer(sys.stdout)
-    progress = render._ProgressLine(sys.stdout)
+    verbose_renderer = render.VerboseRenderer(sys.stdout)
+    progress = render.ProgressLine(sys.stdout)
     target: tuple[str, str, Path] | None = None
     state = "not started"
     last_check = 0.0
@@ -88,7 +88,7 @@ def wait_cloud_init(
             # 动画分帧累加 0.1s 会有浮点误差，留 1ms 容差
             if now - last_check >= POLL_INTERVAL - 0.001:
                 try:
-                    state = query._query_state(name, target)
+                    state = query.query_state(name, target)
                 except ssh.SshError:
                     target = None
                     if now >= deadline:
@@ -116,7 +116,7 @@ def wait_cloud_init(
                     (LOG_FILE, VERBOSE_DEBUG_LINES),
                 ):
                     try:
-                        lines.extend(query._tail_lines(name, target, path, count))
+                        lines.extend(query.tail_lines(name, target, path, count))
                     except (ssh.SshError, CloudInitError) as exc:
                         lines.append(str(exc))
                 verbose_renderer.update(state, lines)
@@ -143,7 +143,7 @@ def wait_cloud_init(
             if state == "error":
                 verbose_renderer.clear()
                 progress.clear()
-                render._print_failure(name, target)
+                render.print_failure(name, target)
                 return 1
 
             if verbose:

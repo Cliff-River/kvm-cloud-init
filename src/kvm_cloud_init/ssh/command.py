@@ -24,7 +24,7 @@ def capture_command(
     deadline: float | None = None,
 ) -> tuple[str, str, int]:
     """在远端执行命令并捕获输出，返回 ``(stdout, stderr, exit_code)``。"""
-    ssh_client = client._connect(instance, host, user, key_path, deadline=deadline)
+    ssh_client = client.connect(instance, host, user, key_path, deadline=deadline)
     try:
         _stdin, stdout, stderr = ssh_client.exec_command(command, timeout=timeout)
         out = stdout.read().decode("utf-8", "replace")
@@ -50,7 +50,7 @@ def stream_command(
     用于 ``cloud-init log -f``：输出实时转发到本地 stdout/stderr；
     被 ``should_stop`` 提前终止时返回 0，正常结束时返回远端退出码。
     """
-    ssh_client = client._connect(instance, host, user, key_path, deadline=deadline)
+    ssh_client = client.connect(instance, host, user, key_path, deadline=deadline)
     try:
         _stdin, stdout, _stderr = ssh_client.exec_command(command)
         chan = stdout.channel
@@ -58,11 +58,11 @@ def stream_command(
         while True:
             moved = False
             if chan.recv_ready():
-                sys.stdout.buffer.write(chan.recv(client._BUFSIZE))
+                sys.stdout.buffer.write(chan.recv(client.BUFSIZE))
                 sys.stdout.buffer.flush()
                 moved = True
             if chan.recv_stderr_ready():
-                sys.stderr.buffer.write(chan.recv_stderr(client._BUFSIZE))
+                sys.stderr.buffer.write(chan.recv_stderr(client.BUFSIZE))
                 sys.stderr.buffer.flush()
                 moved = True
             if should_stop is not None and should_stop():

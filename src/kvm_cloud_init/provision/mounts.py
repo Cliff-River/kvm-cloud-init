@@ -97,7 +97,7 @@ def mount_instance(
         raise MountError(f"{target} is already mounted in instance {name}")
 
     # 复用 shell/exec 的自动启动与 IP/sshd 等待逻辑，不另起一套生命周期
-    access._ensure_running(store, conn, name)
+    access.ensure_running(store, conn, name)
     dom = domains.lookup_domain(conn, name)
 
     source_path = str(source.resolve())

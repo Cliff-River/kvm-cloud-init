@@ -107,7 +107,7 @@ console script 入口：`kvmci`（Python 包名仍为 `kvm-cloud-init`）。
     实例路径），同步源目录**内容**，目标中源已不存在的条目一律递归删除
     （文件/目录/符号链接逐个计数并逐条打印 `deleted <path>`）；远端路径
     既支持绝对路径也支持相对路径（相对 SFTP 默认目录即登录用户家目录，与
-    cp/scp 一致；`_ensure_remote_dirs` 必须同时支持两种路径逐级创建）；
+    cp/scp 一致；`ensure_remote_dirs` 必须同时支持两种路径逐级创建）；
     普通文件按 size + 整数秒 mtime 判重，传输后 utime 保留源 mtime，符号链接
     比对 readlink 目标，类型不匹配先删后建，仅支持普通文件/目录/符号链接；
     本地或远端路径为 `/` 一律拒绝（源或目标均拒绝），目标已存在但非目录

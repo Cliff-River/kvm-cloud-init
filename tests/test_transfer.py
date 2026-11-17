@@ -26,7 +26,7 @@ def ssh_ready(monkeypatch):
     monkeypatch.setattr(
         paths.domains, "lookup_domain", lambda _conn, _name: object()
     )
-    monkeypatch.setattr(paths.access, "_ensure_running", lambda *a: None)
+    monkeypatch.setattr(paths.access, "ensure_running", lambda *a: None)
     monkeypatch.setattr(
         paths.access,
         "wait_ssh_target",

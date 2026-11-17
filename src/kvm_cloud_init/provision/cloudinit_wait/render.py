@@ -20,7 +20,7 @@ from .constants import (
 )
 
 
-class _VerboseRenderer:
+class VerboseRenderer:
     """固定 7 行区域滚动显示 cloud-init 输出。"""
 
     def __init__(self, stream: object) -> None:
@@ -70,7 +70,7 @@ class _VerboseRenderer:
         self._rendered = 0
 
 
-class _ProgressLine:
+class ProgressLine:
     """TTY 下用单行原地刷新进度，非 TTY 退化为逐行追加。"""
 
     def __init__(self, stream: object) -> None:
@@ -117,16 +117,16 @@ class _ProgressLine:
             self._active = False
 
 
-def _print_failure(name: str, target: tuple[str, str, Path]) -> None:
+def print_failure(name: str, target: tuple[str, str, Path]) -> None:
     print("Cloud-init failed:", file=sys.stderr)
     try:
-        long_out, long_err, _code = query._capture_with_sudo(
+        long_out, long_err, _code = query.capture_with_sudo(
             name, target, STATUS_LONG_CMD
         )
         detail = (long_out or long_err).strip()
         if detail:
             print(detail, file=sys.stderr)
-        tail = query._tail_lines(name, target, OUTPUT_LOG, 20)
+        tail = query.tail_lines(name, target, OUTPUT_LOG, 20)
         if tail:
             print(f"Last 20 lines of {OUTPUT_LOG}:", file=sys.stderr)
             for line in tail:

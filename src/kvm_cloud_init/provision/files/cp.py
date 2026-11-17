@@ -59,7 +59,7 @@ def _upload(
             f"Unsupported local path type: {local} "
             "(only regular files, directories and symlinks are supported)"
         )
-    host, user, key_path, deadline = paths._connect_target(
+    host, user, key_path, deadline = paths.connect_target(
         store, conn, remote.instance
     )
     remote_target = remote.path
@@ -91,7 +91,7 @@ def _download(
     remote: paths.RemotePath,
     local: Path,
 ) -> int:
-    host, user, key_path, deadline = paths._connect_target(
+    host, user, key_path, deadline = paths.connect_target(
         store, conn, remote.instance
     )
     # 与 scp -r 一致：本地目标是已存在目录时，放入该目录并沿用远端名称
